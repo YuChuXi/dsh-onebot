@@ -63,52 +63,30 @@ resolve_dsh_root() {
 
 NODE_MODULES=$(resolve_dsh_root) || { echo "link-host: cannot locate the dsh install (dsh not on PATH, no npx store found)" >&2; exit 1; }
 
-# The @deepseek-ai/dsh-* packages this plugin imports at runtime or whose
-# types it compiles against, plus the ones the tests import directly.
-# Transitive deps resolve from the host install.
-LINK_PKGS=(
-  cordis
-  cosmokit
-  schemastery
-  dsh-agent
-  dsh-brand
-  # 0.2 line hosts (rc.2/rc.3) ship no dsh-invariants and the plugin never
-  # imports it; a list entry missing on the host still fails hard below.
-  dsh-llm
-  dsh-scope
-  dsh-session
-  # tests/session-v4-persistence.spec.ts imports this chain directly.
-  dsh-session-format
-  dsh-session-format-catalog
-  dsh-session-format-v0-to-v1
-  dsh-session-format-v1-to-v2
-  dsh-session-format-v2-to-v3
-  dsh-session-format-v3-to-v4
-  dsh-system-prompt
-  dsh-timeout
-  dsh-tools
-  dsh-typert-protocol
-  dsh-user-approval
-  dsh-util-values
+# Peer packages are whatever package.json declares — the plugin states its host
+# contract once, and this script follows it. A package the host no longer
+# publishes fails hard below instead of being silently skipped.
+mapfile -t PEER_NAMES < <(
+  node --input-type=module -e '
+    import { readFileSync } from "node:fs"
+    const pkg = JSON.parse(readFileSync("package.json", "utf8"))
+    for (const name of Object.keys(pkg.peerDependencies ?? {})) console.log(name)
+  '
 )
 
-mkdir -p node_modules/@deepseek-ai
-for p in "${LINK_PKGS[@]}"; do
-  target="$NODE_MODULES/@deepseek-ai/$p"
+for name in "${PEER_NAMES[@]}"; do
+  target="$NODE_MODULES/$name"
+  # schemastery/cosmokit live at the host root or under @deepseek-ai/, depending
+  # on the host release; peer names without a scope try the scoped location too.
+  case "$name" in
+    @*/*) ;;
+    *) [ -e "$target" ] || target="$NODE_MODULES/@deepseek-ai/$name" ;;
+  esac
   [ -e "$target" ] || { echo "link-host: missing host package: $target" >&2; exit 1; }
   # Remove the npm-installed copy (file or dir) before linking.
-  rm -rf "node_modules/@deepseek-ai/$p"
-  ln -sfn "$target" "node_modules/@deepseek-ai/$p"
-done
-
-# schemastery/cosmokit: hoisted to the top level of older host installs, but
-# rc.2+ keeps them only under @deepseek-ai/ — link whichever exists.
-for p in schemastery cosmokit; do
-  target="$NODE_MODULES/$p"
-  [ -e "$target" ] || target="$NODE_MODULES/@deepseek-ai/$p"
-  [ -e "$target" ] || { echo "link-host: missing host package: $target" >&2; exit 1; }
-  rm -rf "node_modules/$p"
-  ln -sfn "$target" "node_modules/$p"
+  mkdir -p "$(dirname "node_modules/$name")"
+  rm -rf "node_modules/$name"
+  ln -sfn "$target" "node_modules/$name"
 done
 
 echo "linked host packages from: $NODE_MODULES"

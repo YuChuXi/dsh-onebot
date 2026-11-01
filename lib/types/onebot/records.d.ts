@@ -33,6 +33,20 @@ export interface RenderedRecord {
     role?: 'owner' | 'admin';
     message: unknown;
 }
+/**
+ * 一条 notice 记录：系统事件不是发言，没有 qq / nickname / message。
+ * 字段就是 OneBot 原始事件（信封字段已收敛进 `notice`），按原样交给模型。
+ */
+export interface NoticeRecord {
+    /** 事件类型（notify/poke、group_recall 这类）。 */
+    notice: string;
+    /** 事件时间 HH:MM。 */
+    time?: string;
+    /** OneBot 原始字段，原样透传。 */
+    [key: string]: unknown;
+}
+/** 注入载荷里的一条记录：真人消息或系统事件。 */
+export type ConversationRecord = MessageRecord | NoticeRecord;
 /** 插件自己写的说明记录的发送方。 */
 export declare const SYSTEM_QQ = "0";
 /** 插件自己写的说明记录的显示名。 */
@@ -76,23 +90,23 @@ export declare function messageRecord(fields: {
  */
 export declare function systemRecord(note: string, clock?: string): MessageRecord;
 /**
- * 渲染一条记录：message 变成模型可见值，其余字段原样。幂等。
+ * 渲染一条记录：消息的 message 变成模型可见值，事件记录原样输出。幂等。
  *
  * Args:
- *   record (MessageRecord): 一条记录。
+ *   record (ConversationRecord): 一条记录。
  *
  * Returns:
- *   RenderedRecord: 渲染后的记录。
+ *   RenderedRecord | NoticeRecord: 模型侧记录。
  *
  * Callers:
  *   - `formatRecords`。
  */
-export declare function renderRecord(record: MessageRecord): RenderedRecord;
+export declare function renderRecord(record: ConversationRecord): RenderedRecord | NoticeRecord;
 /**
  * 把一次回合的全部记录序列化成模型收到的唯一载荷。
  *
  * Args:
- *   records (MessageRecord[]): 按时间升序的记录。
+ *   records (ConversationRecord[]): 按时间升序的记录。
  *
  * Returns:
  *   string: JSON 数组文本。
@@ -100,4 +114,4 @@ export declare function renderRecord(record: MessageRecord): RenderedRecord;
  * Callers:
  *   - `src/inbound/index.ts:InboundPipeline.processInbound`、`sleepTurn`。
  */
-export declare function formatRecords(records: MessageRecord[]): string;
+export declare function formatRecords(records: ConversationRecord[]): string;

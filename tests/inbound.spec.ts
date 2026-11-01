@@ -246,17 +246,28 @@ describe('inbound pipeline', () => {
     h.client.send(JSON.stringify({
       post_type: 'notice', notice_type: 'notify', sub_type: 'poke',
       user_id: 10001, target_id: 20003, group_id: 888, self_id: 10002,
+      raw_info: [{ uid: 'u-10001', txt: '小明' }, { txt: ' 👋 戳了戳' }, { uid: 'u-20003', txt: '小红' }],
     }))
     await new Promise(resolve => setTimeout(resolve, 100))
     expect(h.captured.followups).toHaveLength(0)
 
-    // 戳机器人本人：notice 分支合成一条 poke 段消息，等同 @，唤醒一个回合。
+    // 戳机器人本人：拍一拍的原文案随 raw_info 到达，等同一次 @，唤醒一个回合。
     h.client.send(JSON.stringify({
       post_type: 'notice', notice_type: 'notify', sub_type: 'poke',
       user_id: 10001, target_id: 10002, group_id: 888, self_id: 10002,
+      raw_info: [{ uid: 'u-10001', txt: '小明' }, { txt: ' 👋 揉了揉' }, { uid: 'u-10002', txt: '鱼' }, { txt: '的肚几' }],
     }))
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
-    expect(lastRecord(h.captured.followups[0])).toMatchObject({ qq: '10001' })
+    const records = delivered(h.captured.followups[0])
+    // 互戳那条已经并进同一时间线，排在触发事件之前。
+    expect(records).toHaveLength(2)
+    expect(records[0]).toMatchObject({ notice: 'notify/poke', target_id: 20003 })
+    expect(JSON.stringify(records[0])).toContain('戳了戳')
+    // 事件记录只有 notice 与 OneBot 原始字段：不是发言，没有 qq / nickname / message。
+    expect(records[1]).not.toHaveProperty('qq')
+    expect(records[1]).not.toHaveProperty('nickname')
+    expect(records[1]).not.toHaveProperty('message')
+    expect(JSON.stringify(records[1])).toContain('揉了揉')
 
     h.client.close()
     await h.bridge.stop()
@@ -281,7 +292,13 @@ describe('inbound pipeline', () => {
       self_id: 10002,
     }))
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
-    expect(h.captured.followups[0].text).toContain('撤回了一条消息')
+    const records = delivered(h.captured.followups[0])
+    const recall = records.find(record => record.notice === 'group_recall')
+    // notice 只是事件记录：字段与 OneBot 原始事件一致，没有拼出来的中文句子。
+    expect(recall).toMatchObject({
+      notice: 'group_recall', group_id: 888, user_id: 20003, operator_id: 20003, message_id: 77,
+    })
+    expect(lastRecord(h.captured.followups[0])).toMatchObject({ qq: '10001' })
 
     h.client.close()
     await h.bridge.stop()

@@ -8,6 +8,7 @@ import { incomingSegments } from '../onebot/segments.js'
 import type { IncomingSegment } from '../onebot/segments.js'
 import type { ChatId } from '../chat/index.js'
 import { buildChatId, displayName } from '../chat/index.js'
+import type { NoticeRecord } from '../onebot/records.js'
 import { renderNotice } from './notice.js'
 
 /** 一条 OneBot 消息对象里管线会读的字段（实现之间略有出入）。 */
@@ -33,22 +34,24 @@ export interface RawMessage {
 export interface NormalizedInbound {
   /** 'private' | 'group' — message_type 闸门。 */
   kind: 'private' | 'group'
-  /** 发送方 QQ（'' 已在 normalize 时被拒绝）。 */
+  /** 发言方 QQ；群 notice 没有发言方时为空。 */
   userId: string
   /** 群号；私聊为 ''。 */
   groupId: string
   /** 会话 id（private:<qq> | group:<群号>）。 */
   chatId: ChatId
-  /** 段数组：入站消息的唯一形态。 */
+  /** 段数组：入站消息的唯一形态；notice 为空。 */
   segments: IncomingSegment[]
-  /** 原始消息对象：recordOf 会解析它。 */
+  /** 原始消息对象：recordOf 会解析它；notice 只填 user_id 与 time。 */
   message: RawMessage
   /** 事件自身的 message_id（没有就不做去重）。 */
   messageId?: string
-  /** 发送方原始显示名（尚未清洗）。 */
+  /** 发送方原始显示名（尚未清洗）；notice 为空。 */
   nickname: string
-  /** 是否指向机器人本人（等同一次 @）；不指向的事件只进入上下文，不唤醒回合。 */
+  /** 是否指向机器人本人（等同一次 @）；不指向的 notice 只进入上下文，不唤醒回合。 */
   wakes: boolean
+  /** notice 来源的事件记录；普通消息没有这一项。 */
+  notice?: NoticeRecord
 }
 
 /**
@@ -93,9 +96,9 @@ export function normalizeOneBot11(event: OneBotEvent): NormalizedInbound | null 
 /**
  * 把任意入站事件归一化成同一种形状。
  *
- * 消息事件直接使用自身字段；notice 事件由 `renderNotice` 渲染成同一形状的
- * 会话记录（会话由 group_id / user_id 决定，段数组描述发生了什么），
- * 因此「是否唤醒、进入哪个会话」在归一化之后只有一个判定点。
+ * 消息事件直接使用自身字段；notice 事件由 `renderNotice` 收敛成事件记录
+ * （类型 + OneBot 原始字段），会话由 group_id / user_id 决定——于是
+ * 「进入哪个会话、是否唤醒」在归一化之后只有一个判定点。
  *
  * Args:
  *   event (OneBotEvent): 原始事件。
@@ -110,28 +113,25 @@ export function normalizeOneBot11(event: OneBotEvent): NormalizedInbound | null 
 export function normalizeEvent(event: OneBotEvent, selfId: string): NormalizedInbound | null {
   if (event.post_type === 'message' || event.message_type !== undefined) return normalizeOneBot11(event)
   if (event.post_type !== 'notice') return null
-  const record = renderNotice(event, selfId)
-  if (record === null) return null
-  const groupId = String(event.group_id ?? '')
+  const rendered = renderNotice(event, selfId)
+  if (rendered === null) return null
+  const record = rendered.record
+  const groupId = String(record.group_id ?? '')
   const kind: 'private' | 'group' = groupId !== '' ? 'group' : 'private'
-  const userId = record.from
-  if (userId === '') return null
+  const userId = String(record.user_id ?? '')
+  // 私聊事件的对端是 user_id；没有对端（或对端就是机器人自己）时不属于任何会话。
+  if (kind === 'private' && (userId === '' || userId === selfId)) return null
   const chatId = buildChatId(kind, kind === 'private' ? userId : groupId)
-  const time = event.time === undefined ? undefined : Number(event.time)
-  const message: RawMessage = {
-    user_id: userId,
-    time,
-    sender: { user_id: userId },
-    message: record.segments,
-  }
+  const time = Number(event.time ?? 0)
   return {
     kind,
     userId,
     groupId,
     chatId,
-    segments: record.segments,
-    message,
+    segments: [],
+    message: { user_id: userId, time },
     nickname: '',
-    wakes: record.wakes,
+    wakes: rendered.wakes,
+    notice: record,
   }
 }

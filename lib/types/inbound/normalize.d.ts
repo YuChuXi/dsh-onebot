@@ -5,6 +5,7 @@
 import type { OneBotEvent } from '../onebot/connection.js';
 import type { IncomingSegment } from '../onebot/segments.js';
 import type { ChatId } from '../chat/index.js';
+import type { NoticeRecord } from '../onebot/records.js';
 /** 一条 OneBot 消息对象里管线会读的字段（实现之间略有出入）。 */
 export interface RawMessage {
     user_id?: string | number;
@@ -27,22 +28,24 @@ export interface RawMessage {
 export interface NormalizedInbound {
     /** 'private' | 'group' — message_type 闸门。 */
     kind: 'private' | 'group';
-    /** 发送方 QQ（'' 已在 normalize 时被拒绝）。 */
+    /** 发言方 QQ；群 notice 没有发言方时为空。 */
     userId: string;
     /** 群号；私聊为 ''。 */
     groupId: string;
     /** 会话 id（private:<qq> | group:<群号>）。 */
     chatId: ChatId;
-    /** 段数组：入站消息的唯一形态。 */
+    /** 段数组：入站消息的唯一形态；notice 为空。 */
     segments: IncomingSegment[];
-    /** 原始消息对象：recordOf 会解析它。 */
+    /** 原始消息对象：recordOf 会解析它；notice 只填 user_id 与 time。 */
     message: RawMessage;
     /** 事件自身的 message_id（没有就不做去重）。 */
     messageId?: string;
-    /** 发送方原始显示名（尚未清洗）。 */
+    /** 发送方原始显示名（尚未清洗）；notice 为空。 */
     nickname: string;
-    /** 是否指向机器人本人（等同一次 @）；不指向的事件只进入上下文，不唤醒回合。 */
+    /** 是否指向机器人本人（等同一次 @）；不指向的 notice 只进入上下文，不唤醒回合。 */
     wakes: boolean;
+    /** notice 来源的事件记录；普通消息没有这一项。 */
+    notice?: NoticeRecord;
 }
 /**
  * 把一条 OneBot 11 事件收缩成中性入站事件；不是可处理的消息事件时返回 null。
@@ -61,9 +64,9 @@ export declare function normalizeOneBot11(event: OneBotEvent): NormalizedInbound
 /**
  * 把任意入站事件归一化成同一种形状。
  *
- * 消息事件直接使用自身字段；notice 事件由 `renderNotice` 渲染成同一形状的
- * 会话记录（会话由 group_id / user_id 决定，段数组描述发生了什么），
- * 因此「是否唤醒、进入哪个会话」在归一化之后只有一个判定点。
+ * 消息事件直接使用自身字段；notice 事件由 `renderNotice` 收敛成事件记录
+ * （类型 + OneBot 原始字段），会话由 group_id / user_id 决定——于是
+ * 「进入哪个会话、是否唤醒」在归一化之后只有一个判定点。
  *
  * Args:
  *   event (OneBotEvent): 原始事件。

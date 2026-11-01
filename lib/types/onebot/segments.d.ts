@@ -50,12 +50,6 @@ export interface SegmentData {
         key?: string;
         url?: string;
     };
-    /** 戳一戳：真实戳一戳走 notice，进管线的是桥接合成的段。 */
-    poke: {
-        qq?: string;
-        id?: string;
-        name?: string;
-    };
     dice: {
         result?: string;
     };

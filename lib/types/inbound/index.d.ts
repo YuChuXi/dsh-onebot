@@ -1,6 +1,5 @@
 import type { MediaStore } from '../media/store.js';
 import type { Transcriber } from '../media/stt.js';
-import type { IncomingSegment } from '../onebot/segments.js';
 import type { AccessPolicyConfig, ChatId, UserRole } from '../chat/index.js';
 import type { MessageRecord } from '../onebot/records.js';
 import type { BridgeConfig } from '../bridge/config.js';
@@ -73,7 +72,7 @@ export declare class InboundPipeline {
     private readonly memberCache;
     /** 进行中的成员表拉取，避免一阵 @ 触发多次接口调用。 */
     private readonly memberFetches;
-    /** 会话 → 会话事件（戳一戳、撤回、禁言、成员变动等 notice），在下一次载荷里并回同一条时间线。 */
+    /** 会话 → 系统事件（戳一戳、撤回、禁言、成员变动等），在下一次载荷里并回同一条时间线。 */
     private readonly contextBuffers;
     /** 会话 → 已经提示过的休眠窗口标识。 */
     private readonly sleepNotices;
@@ -252,13 +251,19 @@ export declare class InboundPipeline {
      * 每次 @ 触发都向 NapCat 要最近 N 条，只保留上一次注入之后、这一次之前
      * 的部分——机器人没看见过的闲聊，不重放已投递的内容。水位存在会话映射里，
      * 重启、驱逐、换会话都不丢；有 id 时按 id 切分（同一秒多条也不串），
-     * 滑出历史时退回时间比较并标记截断。
+     * 滑出历史时退回时间比较并标记截断。系统事件与消息并回同一条时间线。
      *
-     * @param chatId 目标会话（水位键）。
-     * @param groupId 要查询的群；私聊为 ''。
-     * @param trigger 触发本回合的消息；末尾永远是它。
-     * @param peek 只读（休眠唤醒），不消费戳一戳缓冲、不推进水位。
-     * @returns 窗口内的消息对象（含触发消息）与是否截断。
+     * Args:
+     *   chatId (ChatId): 目标会话（水位键）。
+     *   groupId (string): 要查询的群；私聊为 ''。
+     *   trigger (RawMessage | undefined): 触发本回合的消息；末尾永远是它。notice 触发时为 undefined。
+     *   peek (boolean): 只读（休眠唤醒），不消费系统事件缓冲、不推进水位。
+     *
+     * Returns:
+     *   Promise<{ entries: WindowEntry[]; truncated: boolean }>: 窗口记录与是否截断。
+     *
+     * Callers:
+     *   - `processInbound`、`sleepTurn`。
      */
     private recentMessages;
     /**
@@ -277,21 +282,20 @@ export declare class InboundPipeline {
      */
     private noteInjected;
     /**
-     * 记录一条会话事件（戳一戳、撤回、禁言、成员变动等），等下一次载荷注入时
-     * 并回时间线。事件不唤醒回合：进入上下文，而不是发起对话。
+     * 记录一条不指向机器人的系统事件（戳一戳、撤回、禁言、成员变动等），
+     * 等下一次载荷注入时并回时间线。事件不唤醒回合：进入上下文，而不是发起对话。
      *
      * Args:
      *   chatId (ChatId): 事件所属会话。
-     *   from (string): 事件涉及的成员 QQ 号。
-     *   segments (IncomingSegment[]): 与普通消息同构的段数组。
+     *   notice (NoticeRecord): 已归一化的事件记录。
      *
      * Returns:
      *   void: 无返回值。
      *
      * Callers:
-     *   - `processInbound`（wakes 为 false 的会话事件）。
+     *   - `processInbound`（wakes 为 false 的 notice）。
      */
-    rememberContext(chatId: ChatId, from: string, segments: IncomingSegment[]): void;
+    private rememberNotice;
     /**
      * 群成员 QQ → 显示名，按群缓存（30 分钟）。
      *
@@ -368,7 +372,7 @@ export declare class InboundPipeline {
      * 载荷的回合级后果：最后一条记录（要回答的这条）的语音后台转写。
      *
      * Args:
-     *   records (MessageRecord[]): 本回合记录。
+     *   records (ConversationRecord[]): 本回合记录。
      *   chatId (ChatId): 会话 id。
      *
      * Returns:

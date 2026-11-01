@@ -1,13 +1,15 @@
 /**
  * 入站管线：OneBot 事件 → 一次 agent 回合。
  *
- * 两件事：`normalizeOneBot11` 把原始事件收缩成中性入站事件（null = 不处理），
- * `InboundPipeline` 让它依次通过闸门（去重 → 自身 → 策略 → 提及 → 命令 → 休眠），
- * 然后把**同一房间最近的一批消息 + 这条触发消息**组装成记录数组交给回合。
+ * 两件事：`normalizeOneBot11` / `normalizeEvent` 把原始事件收缩成中性入站事件
+ * （null = 不处理），`InboundPipeline` 让它依次通过闸门（去重 → 自身 → 策略 →
+ * 提及 → 命令 → 休眠），然后把**同一房间最近的一批消息与系统事件 + 这条触发
+ * 事件**组装成记录数组交给回合。
  *
- * 载荷是记录数组而不是一段拼接文本：每条消息都是一个 `{qq, nickname, id, time,
- * role?, message}` 记录，媒体段带本机路径，引用与合并转发在原位置展开成记录。
- * 窗口水位 `{time, id}` 随会话映射持久化：注入过的消息不会再注入一次。
+ * 载荷是记录数组而不是一段拼接文本：真人消息是 `{qq, nickname, id, time,
+ * role?, message}`，系统事件是 `{notice, time?, …OneBot 原始字段}`；媒体段带
+ * 本机路径，引用与合并转发在原位置展开成记录。窗口水位 `{time, id}` 随会话
+ * 映射持久化：注入过的消息不会再注入一次。
  * @module dsh-onebot/inbound
  */
 import { stat, writeFile } from 'node:fs/promises'
@@ -17,17 +19,18 @@ import { extForInboundName } from '../media/store.js'
 import type { MediaStore } from '../media/store.js'
 import type { Transcriber } from '../media/stt.js'
 import { transcriptLabel } from '../media/stt.js'
-import type { IncomingSegment, MediaKind, MediaRef, ParsedMessage, Segment } from '../onebot/segments.js'
+import type { MediaKind, MediaRef, ParsedMessage, Segment } from '../onebot/segments.js'
 import {
-  detectMention, fillMentionNames, incomingSegments, MEDIA_KINDS, mediaKindOf, mediaLabel, parseMessage, renderMessage,
+  detectMention, fillMentionNames, incomingSegments, MEDIA_KINDS, mediaKindOf, mediaLabel, parseMessage,
 } from '../onebot/segments.js'
 import type { AccessPolicyConfig, ChatId, UserRole } from '../chat/index.js'
 import { buildChatId, classifyUserRole, displayName, dmAllowed, groupAllowed, splitChatId } from '../chat/index.js'
-import type { MessageRecord } from '../onebot/records.js'
+import type { ConversationRecord, MessageRecord, NoticeRecord } from '../onebot/records.js'
 import { formatRecords, messageRecord, SYSTEM_NICKNAME, systemRecord } from '../onebot/records.js'
 import type { BridgeConfig } from '../bridge/config.js'
 import type { ChatSettings } from '../registry/index.js'
 import { describeError } from '../shared/errors.js'
+import { formatClock } from '../shared/clock.js'
 import { normalizeOneBot11 } from './normalize.js'
 import type { NormalizedInbound, RawMessage } from './normalize.js'
 import { dormancyKey, sleepingNow } from './sleep.js'
@@ -109,8 +112,8 @@ export class InboundPipeline {
   private readonly memberCache = new Map<string, { at: number; names: Map<string, string> }>()
   /** 进行中的成员表拉取，避免一阵 @ 触发多次接口调用。 */
   private readonly memberFetches = new Map<string, Promise<Map<string, string>>>()
-  /** 会话 → 会话事件（戳一戳、撤回、禁言、成员变动等 notice），在下一次载荷里并回同一条时间线。 */
-  private readonly contextBuffers = new Map<ChatId, Array<{ at: number; from: string; segments: IncomingSegment[] }>>()
+  /** 会话 → 系统事件（戳一戳、撤回、禁言、成员变动等），在下一次载荷里并回同一条时间线。 */
+  private readonly contextBuffers = new Map<ChatId, Array<{ at: number; notice: NoticeRecord }>>()
   /** 会话 → 已经提示过的休眠窗口标识。 */
   private readonly sleepNotices = new Map<ChatId, string>()
   /** 缓存令牌 → 已取到的本地文件。 */
@@ -145,15 +148,17 @@ export class InboundPipeline {
    *   - `src/bridge/index.ts:processInbound`。
    */
   async processInbound(inbound: NormalizedInbound): Promise<void> {
-    // 不指向机器人的会话事件只进入上下文：模型下次看到它，但不因此发起回复。
+    // 不指向机器人的系统事件只进入上下文：模型下次看到它，但不因此发起回复。
     if (!inbound.wakes) {
-      this.rememberContext(inbound.chatId, inbound.userId, inbound.segments)
-      this.ctx.log('debug', '会话事件已记入上下文: ' + inbound.chatId)
+      if (inbound.notice !== undefined) this.rememberNotice(inbound.chatId, inbound.notice)
+      this.ctx.log('debug', '系统事件已记入上下文: ' + inbound.chatId)
       return
     }
     if (this.duplicated(inbound)) return
     const { kind, userId, groupId, chatId } = inbound
-    if (this.ctx.config.ignoreSelf && this.ctx.selfId() !== '' && userId === this.ctx.selfId()) {
+    // ignoreSelf 针对机器人自己发出的消息回声；notice 的 user_id 是事件主体（例如入群的是机器人）。
+    if (inbound.notice === undefined
+      && this.ctx.config.ignoreSelf && this.ctx.selfId() !== '' && userId === this.ctx.selfId()) {
       this.ctx.log('debug', '机器人自己的消息已忽略: ' + chatId)
       currentTrace()?.emit('self', { ok: false, reason: TRACE_REASONS.inboundSelf })
       return
@@ -172,12 +177,12 @@ export class InboundPipeline {
       return
     }
 
-    // 指向机器人的戳一戳等同一次 @：桥接只为戳机器人本人生成合成消息。
+    // notice 是否指向机器人已由归一化判定（wakes）；只有真人消息需要再过 @ 闸。
     const parsed = this.parseOf(inbound.message)
-    const poked = parsed.segments.some(segment => segment.type === 'poke')
-    let mentioned = poked || detectMention(parsed.segments, this.ctx.selfId(), this.ctx.config.botQQ)
+    const needsMention = inbound.notice === undefined && kind === 'group' && this.ctx.config.requireMention
+    let mentioned = detectMention(parsed.segments, this.ctx.selfId(), this.ctx.config.botQQ)
     let mentionDropReason: string = TRACE_REASONS.inboundUnmentioned
-    if (kind === 'group' && this.ctx.config.requireMention && !mentioned) {
+    if (needsMention && !mentioned) {
       // 显式 @ 缺失时，只有「回复机器人自己的消息」可以触发；作者必须由
       // get_msg 证实，查询失败 / 作者未知 / 回复他人一律不唤醒（fail-closed）。
       const bot = this.ctx.selfId() || this.ctx.config.botQQ
@@ -206,7 +211,7 @@ export class InboundPipeline {
         }
       }
     }
-    if (kind === 'group' && this.ctx.config.requireMention && !mentioned) {
+    if (needsMention && !mentioned) {
       this.ctx.log('debug', mentionDropReason + ': ' + groupId)
       currentTrace()?.emit('mention', { ok: false, reason: mentionDropReason })
       return
@@ -227,17 +232,21 @@ export class InboundPipeline {
     void this.ctx.media.cleanupExpired()
 
     // 命令在最前面路由：带媒体的消息不该为了当命令而付下载代价。
-    if (await this.ctx.tryHandleCommand(chatId, parsed.text, userId)) {
+    if (inbound.notice === undefined && await this.ctx.tryHandleCommand(chatId, parsed.text, userId)) {
       currentTrace()?.emit('command', { ok: true, reason: TRACE_REASONS.inboundCommand })
       return
     }
 
-    // 载荷 = 房间里的上文 + 这条触发消息，全部是同一种东西：
-    // 可选的截断说明、窗口记录，触发消息永远在最后。
-    const window = await this.recentMessages(chatId, groupId, inbound.message)
-    const records: MessageRecord[] = []
+    // 载荷 = 房间里的上文 + 这条触发事件，全部是同一种东西：
+    // 可选的截断说明、窗口记录，触发事件永远在最后。
+    const window = await this.recentMessages(chatId, groupId, inbound.notice === undefined ? inbound.message : undefined)
+    const records: ConversationRecord[] = []
     if (window.truncated) records.push(systemRecord('更早的消息已省略'))
-    for (const message of window.messages) records.push(await this.recordOf(message, chatId))
+    for (const entry of window.entries) {
+      if (entry.notice !== undefined) records.push(entry.notice)
+      else if (entry.message !== undefined) records.push(await this.recordOf(entry.message, chatId))
+    }
+    if (inbound.notice !== undefined) records.push(inbound.notice)
     this.applyTurnSideEffects(records, chatId)
     // 载荷尾部就是触发消息：注入即推进水位，下次窗口从它之后开始。
     this.noteInjected(chatId, { id: inbound.messageId, time: Number(inbound.message.time ?? 0) })
@@ -337,10 +346,9 @@ export class InboundPipeline {
     const segments = await this.expandSegments(normalized, chatId)
     const sender = message.sender ?? {}
     const qq = String(message.user_id ?? sender.user_id ?? '')
-    const nickname = displayName(sender, qq)
     return messageRecord({
       qq,
-      nickname,
+      nickname: displayName(sender, qq),
       id: message.message_id !== undefined && message.message_id !== null ? String(message.message_id) : undefined,
       time: formatClock(Number(message.time ?? Math.floor(this.now() / 1000)) * 1000),
       role: typeof sender.role === 'string' ? sender.role : message.role,
@@ -581,23 +589,31 @@ export class InboundPipeline {
    * 每次 @ 触发都向 NapCat 要最近 N 条，只保留上一次注入之后、这一次之前
    * 的部分——机器人没看见过的闲聊，不重放已投递的内容。水位存在会话映射里，
    * 重启、驱逐、换会话都不丢；有 id 时按 id 切分（同一秒多条也不串），
-   * 滑出历史时退回时间比较并标记截断。
+   * 滑出历史时退回时间比较并标记截断。系统事件与消息并回同一条时间线。
    *
-   * @param chatId 目标会话（水位键）。
-   * @param groupId 要查询的群；私聊为 ''。
-   * @param trigger 触发本回合的消息；末尾永远是它。
-   * @param peek 只读（休眠唤醒），不消费戳一戳缓冲、不推进水位。
-   * @returns 窗口内的消息对象（含触发消息）与是否截断。
+   * Args:
+   *   chatId (ChatId): 目标会话（水位键）。
+   *   groupId (string): 要查询的群；私聊为 ''。
+   *   trigger (RawMessage | undefined): 触发本回合的消息；末尾永远是它。notice 触发时为 undefined。
+   *   peek (boolean): 只读（休眠唤醒），不消费系统事件缓冲、不推进水位。
+   *
+   * Returns:
+   *   Promise<{ entries: WindowEntry[]; truncated: boolean }>: 窗口记录与是否截断。
+   *
+   * Callers:
+   *   - `processInbound`、`sleepTurn`。
    */
   private async recentMessages(
     chatId: ChatId,
     groupId: string,
     trigger: RawMessage | undefined,
     peek = false,
-  ): Promise<{ messages: RawMessage[]; truncated: boolean }> {
+  ): Promise<{ entries: WindowEntry[]; truncated: boolean }> {
     const total = this.ctx.config.recentMessages ?? 50
     // 私聊没有群历史可拉：窗口就是这一条触发消息。
-    if (groupId === '' || total <= 0) return { messages: trigger === undefined ? [] : [trigger], truncated: false }
+    if (groupId === '' || total <= 0) {
+      return { entries: trigger === undefined ? [] : [{ time: triggerTimeOf(trigger, this.now()), message: trigger }], truncated: false }
+    }
     const keep = Math.max(0, total - 1)
     let messages: RawMessage[]
     try {
@@ -609,10 +625,10 @@ export class InboundPipeline {
       // 群历史是外部接口：拿不到就只注入触发消息，本回合照常回答。
       this.ctx.log('warn', 'get_group_msg_history failed: ' + describeError(error))
       currentTrace()?.emit('history', { ok: false, reason: TRACE_REASONS.recentHistoryFailed })
-      return { messages: trigger === undefined ? [] : [trigger], truncated: false }
+      return { entries: trigger === undefined ? [] : [{ time: triggerTimeOf(trigger, this.now()), message: trigger }], truncated: false }
     }
     const currentId = String(trigger?.message_id ?? '')
-    const triggerTime = Number(trigger?.time ?? Math.floor(this.now() / 1000))
+    const triggerTime = triggerTimeOf(trigger, this.now())
     const settings = this.ctx.getSettings(chatId)
     const watermark = settings.recentWatermark
     const anchorTime = watermark?.time ?? 0
@@ -624,7 +640,7 @@ export class InboundPipeline {
       if (index >= 0) startIndex = index + 1
       else watermarkMissed = true
     }
-    const entries: Array<{ time: number; message: RawMessage }> = []
+    const entries: WindowEntry[] = []
     for (let index = startIndex; index < messages.length; index += 1) {
       const message = messages[index]
       const time = Number(message?.time ?? 0)
@@ -635,22 +651,11 @@ export class InboundPipeline {
       if (!Array.isArray(message?.message) || message.message.length === 0) continue
       entries.push({ time, message })
     }
-    // 会话事件（戳一戳、撤回、禁言、成员变动等）不是历史行：它们在自己的
-    // 缓冲里，这里按时间顺序并回同一条时间线。
+    // 系统事件不是历史行：它们在自己的缓冲里，这里按时间顺序并回同一条时间线。
     const events = peek ? [] : this.contextBuffers.get(chatId) ?? []
-    const names = groupId !== '' && events.length > 0 ? await this.memberNames(groupId) : new Map<string, string>()
     for (const event of events) {
       if (event.at <= anchorTime || event.at > triggerTime) continue
-      if (event.from === this.ctx.selfId()) continue
-      entries.push({
-        time: event.at,
-        message: {
-          user_id: event.from,
-          time: event.at,
-          sender: { user_id: event.from, nickname: names.get(event.from) ?? event.from },
-          message: event.segments,
-        },
-      })
+      entries.push({ time: event.at, notice: event.notice })
     }
     if (!peek) this.contextBuffers.delete(chatId)
     // 载荷最后一条永远是触发消息：历史里已入库就用它，否则补到末尾。
@@ -671,7 +676,7 @@ export class InboundPipeline {
     const truncated = watermarkMissed
       || (anchorTime > 0 && (entries.length > keep || (pageFull && oldestFetched > anchorTime)))
     const window = keep === 0 ? [] : entries.slice(-keep)
-    return { messages: window.map(entry => entry.message), truncated }
+    return { entries: window, truncated }
   }
 
   /**
@@ -698,25 +703,24 @@ export class InboundPipeline {
   }
 
   /**
-   * 记录一条会话事件（戳一戳、撤回、禁言、成员变动等），等下一次载荷注入时
-   * 并回时间线。事件不唤醒回合：进入上下文，而不是发起对话。
+   * 记录一条不指向机器人的系统事件（戳一戳、撤回、禁言、成员变动等），
+   * 等下一次载荷注入时并回时间线。事件不唤醒回合：进入上下文，而不是发起对话。
    *
    * Args:
    *   chatId (ChatId): 事件所属会话。
-   *   from (string): 事件涉及的成员 QQ 号。
-   *   segments (IncomingSegment[]): 与普通消息同构的段数组。
+   *   notice (NoticeRecord): 已归一化的事件记录。
    *
    * Returns:
    *   void: 无返回值。
    *
    * Callers:
-   *   - `processInbound`（wakes 为 false 的会话事件）。
+   *   - `processInbound`（wakes 为 false 的 notice）。
    */
-  rememberContext(chatId: ChatId, from: string, segments: IncomingSegment[]): void {
-    if (chatId === '' || from === '' || segments.length === 0) return
+  private rememberNotice(chatId: ChatId, notice: NoticeRecord): void {
+    if (chatId === '') return
     const at = Math.floor(this.now() / 1000)
     const buffer = this.contextBuffers.get(chatId) ?? []
-    buffer.push({ at, from: String(from), segments })
+    buffer.push({ at, notice })
     while (buffer.length > 100) buffer.shift()
     this.contextBuffers.set(chatId, buffer)
   }
@@ -912,7 +916,7 @@ export class InboundPipeline {
    * 载荷的回合级后果：最后一条记录（要回答的这条）的语音后台转写。
    *
    * Args:
-   *   records (MessageRecord[]): 本回合记录。
+   *   records (ConversationRecord[]): 本回合记录。
    *   chatId (ChatId): 会话 id。
    *
    * Returns:
@@ -921,9 +925,9 @@ export class InboundPipeline {
    * Callers:
    *   - `processInbound`、`sleepTurn`。
    */
-  private applyTurnSideEffects(records: MessageRecord[], chatId: ChatId): void {
+  private applyTurnSideEffects(records: ConversationRecord[], chatId: ChatId): void {
     const last = records[records.length - 1]
-    if (last === undefined || !this.ctx.transcriber.enabled) return
+    if (last === undefined || 'notice' in last || !this.ctx.transcriber.enabled) return
     // 回填后的段只带本机路径：哪一种媒体要转写，由媒体类型自己声明。
     const fileOf = (segment: Segment): string => {
       const data = segment.data as { file?: string }
@@ -1001,13 +1005,18 @@ export class InboundPipeline {
       return false
     }
     this.sleepNotices.set(chatId, key)
-    const window = await this.recentMessages(chatId, inbound.groupId, inbound.message, true)
-    const records: MessageRecord[] = []
-    for (const message of window.messages) {
-      if (String(message.message_id ?? '') === String(inbound.messageId ?? '')) continue
-      records.push(await this.recordOf(message, chatId))
+    const trigger = inbound.notice === undefined ? inbound.message : undefined
+    const window = await this.recentMessages(chatId, inbound.groupId, trigger, true)
+    const records: ConversationRecord[] = []
+    for (const entry of window.entries) {
+      if (entry.notice !== undefined) {
+        records.push(entry.notice)
+      } else if (entry.message !== undefined && String(entry.message.message_id ?? '') !== String(inbound.messageId ?? '')) {
+        records.push(await this.recordOf(entry.message, chatId))
+      }
     }
-    records.push(await this.recordOf(inbound.message, chatId))
+    if (trigger !== undefined) records.push(await this.recordOf(trigger, chatId))
+    else if (inbound.notice !== undefined) records.push(inbound.notice)
     records.push(systemRecord(this.dormancyNotice(), formatClock(this.now())))
     this.applyTurnSideEffects(records, chatId)
     await this.ctx.dispatchFollowup(chatId, formatRecords(records), 'admin', SYSTEM_NICKNAME)
@@ -1015,10 +1024,28 @@ export class InboundPipeline {
   }
 }
 
-/** HH:MM。 */
-function formatClock(ms: number): string {
-  const date = new Date(ms)
-  return String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0')
+/** 上文窗口的一条：真人消息或系统事件，两者都带秒级时间。 */
+interface WindowEntry {
+  time: number
+  message?: RawMessage
+  notice?: NoticeRecord
+}
+
+/**
+ * 触发消息的秒级时间；没有触发消息（notice 触发）时取当前时间。
+ *
+ * Args:
+ *   trigger (RawMessage | undefined): 触发消息。
+ *   now (number): 毫秒时间戳。
+ *
+ * Returns:
+ *   number: 秒级时间戳。
+ *
+ * Callers:
+ *   - `InboundPipeline.recentMessages`。
+ */
+function triggerTimeOf(trigger: RawMessage | undefined, now: number): number {
+  return Number(trigger?.time ?? Math.floor(now / 1000))
 }
 
 /**

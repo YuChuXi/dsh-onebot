@@ -40,8 +40,6 @@ export interface SegmentData {
   file: MediaData & { file_id?: string; name?: string }
   face: { id?: string; name?: string }
   mface: { summary?: string; emoji_id?: string; emoji_package_id?: string; key?: string; url?: string }
-  /** 戳一戳：真实戳一戳走 notice，进管线的是桥接合成的段。 */
-  poke: { qq?: string; id?: string; name?: string }
   dice: { result?: string }
   rps: { result?: string }
   json: { data?: string }
@@ -150,7 +148,6 @@ const MFACE_FIELDS: readonly string[] = ['summary', 'emoji_id', 'emoji_package_i
 /** 已知段类型 → 模型可见段保留的字段。text / face / mface / 媒体段由各自分支处理。 */
 const SEGMENT_FIELDS: Partial<Record<SegmentType, readonly string[]>> = {
   forward: ['id', 'resId'],
-  poke: ['qq', 'id', 'name'],
   dice: ['result'],
   rps: ['result'],
   json: ['data'],

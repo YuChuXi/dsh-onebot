@@ -65,12 +65,10 @@ describe('parseMessage', () => {
     const parsed = parseMessage([
       { type: 'share', data: { url: 'https://x', title: '标题', extra: 'drop' } },
       { type: 'location', data: { lat: '1', lon: '2' } },
-      { type: 'poke', data: { qq: '10001' } },
     ])
     expect(parsed.segments).toEqual([
       { type: 'share', data: { url: 'https://x', title: '标题' } },
       { type: 'location', data: { lat: '1', lon: '2' } },
-      { type: 'poke', data: { qq: '10001' } },
     ])
   })
 })
