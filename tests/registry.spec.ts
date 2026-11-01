@@ -348,7 +348,7 @@ describe('ChatRegistry', () => {
           await options.setup({
             on: () => () => undefined,
             systemPrompt: { section: () => () => undefined },
-            skills: { register: () => () => undefined },
+            get: (name: string) => name === 'skills' ? { register: () => () => undefined } : undefined,
             tools: { register: () => () => undefined },
           })
         }
@@ -816,7 +816,7 @@ describe('ChatRegistry', () => {
         await options.setup({
           on: () => () => undefined,
           systemPrompt: { section: () => () => undefined },
-          skills: { register: () => () => undefined },
+          get: (name: string) => name === 'skills' ? { register: () => () => undefined } : undefined,
           tools: { register: () => () => undefined },
         })
       }

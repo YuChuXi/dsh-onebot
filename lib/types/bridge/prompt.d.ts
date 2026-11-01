@@ -6,12 +6,14 @@
  * 最后一条带 `end: true` 立即结束回合。
  * @module dsh-onebot/prompt
  */
+import type { ChatId } from '../chat/index.js';
 /**
  * 构建 dsh-onebot 通道的提示词。
  * 思考档位不进提示词：它是请求参数（请求里由 installModelSelection 写入），
  * 模型要读当前值就调 qq_thinking(action=get)，不必为一行仪表盘牺牲前缀缓存。
  *
  * Args:
+ *   chatId (ChatId): 会话 id；决定提示词里的群号 / 对方 QQ。
  *   restrictedMembers (boolean): 是否包含受限成员约束。
  *   extraPrompt (string): 附加提示词（人设、背景、语言风格等），原样追加在段落末尾；空串不追加。
  *
@@ -21,4 +23,4 @@
  * Callers:
  *   - `src/bridge/index.ts:installChannelScope` 为每个 QQ 会话注册系统提示词。
  */
-export declare function buildPlatformPrompt(restrictedMembers: boolean, extraPrompt?: string): string;
+export declare function buildPlatformPrompt(chatId: ChatId, restrictedMembers: boolean, extraPrompt?: string): string;

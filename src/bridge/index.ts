@@ -13,7 +13,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { LlmModelInfo, LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import type { Context } from '@deepseek-ai/cordis'
-import type {} from '@deepseek-ai/dsh-skill'
+import type SkillRegistry from '@deepseek-ai/dsh-skill'
 import { readFileSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
 import { join, sep } from 'node:path'
@@ -752,7 +752,7 @@ export class ChatBridge {
     agentCtx.systemPrompt.section({
       name: 'channel:dsh-onebot',
       order: 90,
-      text: buildPlatformPrompt(this.deps.config.restrictedMemberPrefix, extraPrompt),
+      text: buildPlatformPrompt(chatId, this.deps.config.restrictedMemberPrefix, extraPrompt),
     })
     this.installChannelSkill(agentCtx)
     registerTools(agentCtx, this, this.deps.connection, {
@@ -782,7 +782,11 @@ export class ChatBridge {
     if (frontmatter?.[1] === undefined) throw new Error('dsh-onebot: ' + path + ' 缺少 frontmatter')
     const description = /^description:\s*(.+)$/m.exec(frontmatter[1])?.[1]?.trim()
     if (description === undefined || description === '') throw new Error('dsh-onebot: ' + path + ' 缺少 description')
-    agentCtx.skills.register({
+    // agent 作用域的 inject 由宿主组装，不含 skills；ctx.get 绕开属性注入限制，
+    // 返回的服务仍按调用上下文（agent 作用域）落到对应技能层。
+    const skills = agentCtx.get('skills') as SkillRegistry | undefined
+    if (skills === undefined) throw new Error('dsh-onebot: 宿主未提供 skills 服务，无法注册渠道技能')
+    skills.register({
       name: CHANNEL_SKILL_NAME,
       description,
       content: raw.slice(frontmatter[0].length).trim(),

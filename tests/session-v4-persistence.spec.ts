@@ -68,7 +68,7 @@ function makeRecordingAgents() {
         await options.setup({
           on: () => () => undefined,
           systemPrompt: { section: () => () => undefined },
-          skills: { register: () => () => undefined },
+          get: (name: string) => name === 'skills' ? { register: () => () => undefined } : undefined,
           tools: { register: (tool: { name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }) => { tools.push(tool) } },
         })
       }

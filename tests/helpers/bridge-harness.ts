@@ -89,12 +89,16 @@ export function makeFakeAgents(
         const agentCtx = {
           on: () => () => undefined,
           systemPrompt: { section: (s: { name: string }) => { captured.channelSections?.push(s.name); return () => undefined } },
-          skills: {
-            register: (s: { name: string }) => {
-              captured.channelSkills?.push(s.name)
-              return () => undefined
-            },
-          },
+          /** 与宿主 agent 作用域一致：skills 不在该 fiber 的 inject 里，属性访问抛错。 */
+          get skills(): never { throw new Error('cannot get property "skills" without inject') },
+          get: (name: string) => name === 'skills'
+            ? {
+                register: (s: { name: string }) => {
+                  captured.channelSkills?.push(s.name)
+                  return () => undefined
+                },
+              }
+            : undefined,
           tools: {
             register: (t: { name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }) => {
               captured.channelTools?.push(t.name)
@@ -130,7 +134,7 @@ export function makeFakeAgents(
         await options.setup({
           on: () => () => undefined,
           systemPrompt: { section: () => () => undefined },
-          skills: { register: () => () => undefined },
+          get: (name: string) => name === 'skills' ? { register: () => () => undefined } : undefined,
           tools: { register: () => () => undefined },
         })
       }
