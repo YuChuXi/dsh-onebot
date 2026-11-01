@@ -50,6 +50,8 @@ export function makeFakeAgents(
     createdMeta?: Array<{ cwd?: string; agentPreset?: string }>
     channelTools?: string[]
     channelSections?: string[]
+    /** 注册到会话作用域的技能名。 */
+    channelSkills?: string[]
     /** 注册到会话作用域的工具定义（测试可像模型一样调用它们发言）。 */
     tools?: Array<{ name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }>
   },
@@ -87,6 +89,12 @@ export function makeFakeAgents(
         const agentCtx = {
           on: () => () => undefined,
           systemPrompt: { section: (s: { name: string }) => { captured.channelSections?.push(s.name); return () => undefined } },
+          skills: {
+            register: (s: { name: string }) => {
+              captured.channelSkills?.push(s.name)
+              return () => undefined
+            },
+          },
           tools: {
             register: (t: { name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }) => {
               captured.channelTools?.push(t.name)
@@ -119,7 +127,12 @@ export function makeFakeAgents(
         whenIdle: async () => undefined,
       }
       if (typeof options.setup === 'function') {
-        await options.setup({ on: () => () => undefined, systemPrompt: { section: () => () => undefined }, tools: { register: () => () => undefined } })
+        await options.setup({
+          on: () => () => undefined,
+          systemPrompt: { section: () => () => undefined },
+          skills: { register: () => () => undefined },
+          tools: { register: () => () => undefined },
+        })
       }
       return { agent, dispose: async () => undefined }
     }),
@@ -136,6 +149,7 @@ export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: st
     steers: [] as Array<{ text: string; sessionId: string }>,
     channelTools: [] as string[],
     channelSections: [] as string[],
+    channelSkills: [] as string[],
     tools: [] as Array<{ name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }>,
   }
   const agents = makeFakeAgents(sessionIds, captured, opts)

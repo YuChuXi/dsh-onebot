@@ -13,8 +13,11 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { LlmModelInfo, LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-skill'
+import { readFileSync } from 'node:fs'
 import { realpath } from 'node:fs/promises'
-
+import { join, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import type { AgentDefaultModelLike, BridgeDeps } from './config.js'
 import type { OneBotConnection, OneBotEvent } from '../onebot/connection.js'
@@ -40,6 +43,13 @@ import type { TraceSink, TraceScope } from '../ops/trace.js'
 import { runInjectRound, currentInjectRound, isWriteAction } from '../inbound/inject.js'
 import type { InjectChannel } from '../inbound/inject.js'
 import type { InboundRecorder } from '../ops/record.js'
+
+/** 渠道技能的资源目录：包内 assets，随插件发布与更新。 */
+const CHANNEL_SKILL_DIR = fileURLToPath(new URL('../../assets/qq-chat/', import.meta.url)).replace(/[\\/]+$/, '')
+
+/** 渠道技能名。 */
+const CHANNEL_SKILL_NAME = 'qq-chat'
+
 /** T2 (P1): the queue notice sent to a chat when a message arrives while its
  * task is running under the default 'queue' policy — at most ONE per running
  * turn (the flag resets at turn/end) so a burst of queued messages never
@@ -744,10 +754,40 @@ export class ChatBridge {
       order: 90,
       text: buildPlatformPrompt(this.deps.config.restrictedMemberPrefix, extraPrompt),
     })
+    this.installChannelSkill(agentCtx)
     registerTools(agentCtx, this, this.deps.connection, {
       maxImageBytes: this.deps.config.maxImageBytes,
       maxVoiceBytes: this.deps.config.maxVoiceBytes,
       maxFileBytes: this.deps.config.maxFileBytes,
+    })
+  }
+
+  /**
+   * 给 QQ 会话注册渠道技能：正文与 references 都来自包内 assets，
+   * 注册落在 agent 作用域，其他会话看不到这个技能。
+   *
+   * Args:
+   *   agentCtx (Context): 会话的 agent 作用域。
+   *
+   * Returns:
+   *   无。
+   *
+   * Callers:
+   *   - `installChannelScope`。
+   */
+  private installChannelSkill(agentCtx: Context): void {
+    const path = join(CHANNEL_SKILL_DIR, 'SKILL.md')
+    const raw = readFileSync(path, 'utf8')
+    const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u.exec(raw)
+    if (frontmatter?.[1] === undefined) throw new Error('dsh-onebot: ' + path + ' 缺少 frontmatter')
+    const description = /^description:\s*(.+)$/m.exec(frontmatter[1])?.[1]?.trim()
+    if (description === undefined || description === '') throw new Error('dsh-onebot: ' + path + ' 缺少 description')
+    agentCtx.skills.register({
+      name: CHANNEL_SKILL_NAME,
+      description,
+      content: raw.slice(frontmatter[0].length).trim(),
+      source: 'bundled',
+      resourceBase: { kind: 'directory', path: CHANNEL_SKILL_DIR.split(sep).join('/') },
     })
   }
 

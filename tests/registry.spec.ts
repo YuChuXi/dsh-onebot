@@ -348,6 +348,7 @@ describe('ChatRegistry', () => {
           await options.setup({
             on: () => () => undefined,
             systemPrompt: { section: () => () => undefined },
+            skills: { register: () => () => undefined },
             tools: { register: () => () => undefined },
           })
         }
@@ -812,7 +813,12 @@ describe('ChatRegistry', () => {
 
     const resume = vi.fn(async (options: { resumeSessionId: string; agentOptions?: { provider?: string; model?: string }; setup?: (agentCtx: unknown) => unknown }) => {
       if (typeof options.setup === 'function') {
-        await options.setup({ on: () => () => undefined, systemPrompt: { section: () => () => undefined }, tools: { register: () => () => undefined } })
+        await options.setup({
+          on: () => () => undefined,
+          systemPrompt: { section: () => () => undefined },
+          skills: { register: () => () => undefined },
+          tools: { register: () => () => undefined },
+        })
       }
       return {
         agent: { session: { id: String(options.resumeSessionId), seq: 1, header: { cwd: h.mediaDir } }, status: 'idle', cancel: () => undefined, followup: () => undefined, whenIdle: async () => undefined },

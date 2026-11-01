@@ -291,6 +291,20 @@ export declare class ChatBridge {
      *   - `src/registry/index.ts:buildSetup`（创建与恢复会话的组装路径）。
      */
     private installChannelScope;
+    /**
+     * 给 QQ 会话注册渠道技能：正文与 references 都来自包内 assets，
+     * 注册落在 agent 作用域，其他会话看不到这个技能。
+     *
+     * Args:
+     *   agentCtx (Context): 会话的 agent 作用域。
+     *
+     * Returns:
+     *   无。
+     *
+     * Callers:
+     *   - `installChannelScope`。
+     */
+    private installChannelSkill;
     /** Start the NapCat typing indicator (private chats only). */
     private startTyping;
     /** Stop the typing indicator. */

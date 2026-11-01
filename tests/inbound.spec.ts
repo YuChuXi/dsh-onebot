@@ -56,6 +56,7 @@ describe('inbound pipeline', () => {
       'qq_send_forward', 'qq_napcat_api', 'qq_group_history', 'qq_thinking',
     ]))
     expect(h.captured.channelSections).toContain('channel:dsh-onebot')
+    expect(h.captured.channelSkills).toContain('qq-chat')
     const sessionId = h.sessionIds[0]
 
     // 2. 模型通过 qq_send_message 发言；turn/end 只结束回合。

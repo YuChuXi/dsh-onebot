@@ -1,9 +1,8 @@
 /**
  * QQ 经典表情 id → 中文名。
  *
- * id 空间与 QQ 客户端一致：0 是惊讶、14 是微笑、76 是赞、111 是可怜 —— 与
- * https://docs-v1.zhamao.xin/face_list.html 的表情图逐一核对过。没有名字的 id
- * 保持裸 id 输出，不做猜测。
+ * id 空间与 QQ 客户端一致：0 是惊讶、14 是微笑、76 是赞、111 是可怜 —— 名称取自
+ * NapCat 的 `face_config.json`（QSid → QDes）。没有名字的 id 保持裸 id 输出，不做猜测。
  * @module dsh-onebot/faces
  */
 /** id → 中文名。 */
