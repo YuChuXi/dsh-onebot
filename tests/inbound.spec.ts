@@ -700,3 +700,65 @@ describe('record serialization', () => {
     ])
   })
 })
+
+describe('group window truncation', () => {
+  /** 群聊窗口的最小管线：历史由 call 提供，水位由 getSettings 提供。 */
+  const makeWindowHarness = (options: {
+    messages: Array<Record<string, unknown>>
+    watermark?: { time: number; id: string }
+  }) => {
+    const dispatched: string[] = []
+    const pipeline = new InboundPipeline({
+      call: async action => (action === 'get_group_msg_history' ? { messages: options.messages } : undefined),
+      selfId: () => '10002',
+      policy: { dmPolicy: 'open', groupPolicy: 'open', allowFrom: [], groupAllowFrom: [], adminUsers: [], allowAllUsers: true, requireMention: false },
+      getSettings: () => ({ ...(options.watermark !== undefined ? { recentWatermark: options.watermark } : {}) }) as never,
+      saveMapping: () => undefined,
+      sweepIdleChats: async () => undefined,
+      media: { cleanupExpired: async () => undefined } as never,
+      transcriber: { enabled: false, transcribe: async () => '' } as never,
+      steerTranscript: () => undefined,
+      tryHandleCommand: async () => false,
+      dispatchFollowup: async (_chatId, text) => { dispatched.push(text) },
+      log: () => undefined,
+      config: { botQQ: '10002', ignoreSelf: false, requireMention: false, maxInboundFileBytes: 0 },
+    })
+    return { pipeline, dispatched }
+  }
+
+  /** 一条带 message_seq 的群历史（哨兵时间早于触发消息）。 */
+  const history = (id: number, seq: number, time: number, text: string): Record<string, unknown> => ({
+    message_id: id, message_seq: seq, time, sender: { user_id: 10001, nickname: '小明' },
+    message: [{ type: 'text', data: { text } }],
+  })
+
+  it('hands the oldest window message_seq to the model when the window is truncated', async () => {
+    const h = makeWindowHarness({
+      messages: [history(1, 111, 100, 'one'), history(2, 222, 200, 'two')],
+      watermark: { time: 50, id: '999' },
+    })
+    await h.pipeline.processInbound(normalizeOneBot11({
+      post_type: 'message', message_type: 'group', group_id: 823214881, user_id: 10001, self_id: 10002,
+      message_id: 3,
+      message: [{ type: 'text', data: { text: 'hi' } }],
+      sender: { user_id: 10001, nickname: '小明' },
+    }))
+    expect(h.dispatched).toHaveLength(1)
+    expect(h.dispatched[0]).toContain('message_seq=111')
+  })
+
+  it('omits the cursor hint when the window is complete', async () => {
+    const h = makeWindowHarness({
+      messages: [history(1, 111, 100, 'one'), history(2, 222, 200, 'two')],
+      watermark: { time: 90, id: '1' },
+    })
+    await h.pipeline.processInbound(normalizeOneBot11({
+      post_type: 'message', message_type: 'group', group_id: 823214881, user_id: 10001, self_id: 10002,
+      message_id: 3,
+      message: [{ type: 'text', data: { text: 'hi' } }],
+      sender: { user_id: 10001, nickname: '小明' },
+    }))
+    expect(h.dispatched).toHaveLength(1)
+    expect(h.dispatched[0]).not.toContain('message_seq=')
+  })
+})

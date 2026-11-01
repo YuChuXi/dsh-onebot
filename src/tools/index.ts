@@ -15,9 +15,10 @@ import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { ChatBridge } from '../bridge/index.js'
 import type { OneBotConnection } from '../onebot/connection.js'
 import { splitChatId } from '../chat/index.js'
+import { encodeLocalFile, isLocalPath } from '../media/local.js'
 import { incomingSegments, parseMessage } from '../onebot/segments.js'
 import { registerSendTools } from './send.js'
-import { resolveChat, type MediaLimits, type RegisterTool } from './shared.js'
+import { mediaRoots, resolveChat, type MediaLimits, type RegisterTool } from './shared.js'
 
 /** OneBot actions a model may invoke through qq_napcat_api. */
 const NAPCAT_API_WHITELIST = [
@@ -33,10 +34,20 @@ const NAPCAT_API_WHITELIST = [
   'get_group_files_by_folder',
   'get_group_file_url',
   'get_private_file_url',
+  '_get_group_notice',
+  'get_qun_album_list',
+  'get_group_album_media_list',
   'ocr_image',
   'get_ai_characters',
   'send_group_ai_record',
 ]
+
+/** 直通接口里按本机路径读取的参数：action → 字段与大小上限。 */
+const NAPCAT_LOCAL_FILES: Record<string, { field: string; limit: 'maxImageBytes' | 'maxFileBytes' }> = {
+  upload_group_file: { field: 'file', limit: 'maxFileBytes' },
+  upload_private_file: { field: 'file', limit: 'maxFileBytes' },
+  ocr_image: { field: 'image', limit: 'maxImageBytes' },
+}
 
 /** Thinking-intensity levels the llm layer accepts. */
 const THINK_LEVELS = ['off', 'low', 'high', 'max'] as const
@@ -107,7 +118,7 @@ export function registerTools(
 
   register(defineTool({
     name: 'qq_napcat_api',
-    description: '调用 NapCat 白名单内的 OneBot 扩展 API（群成员列表/信息、文件、OCR、AI 语音等）。非白名单 action 会被拒绝。',
+    description: '调用 NapCat 白名单内的 OneBot 扩展 API（群成员、群文件、群公告、群相册、OCR、AI 语音等）。非白名单 action 会被拒绝。',
     parameters: {
       action: {
         type: 'string',
@@ -122,12 +133,20 @@ export function registerTools(
     },
     output: { schema: { type: 'json' }, render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value, null, 2) }] },
     isConcurrencySafe: () => true,
-    execute: async (args, _exec) => {
+    execute: async (args, exec) => {
       const a = args as { action?: unknown; params?: unknown }
       if (typeof a.action !== 'string' || !NAPCAT_API_WHITELIST.includes(a.action)) {
         throw new Error('qq_napcat_api: action 不在白名单内（' + NAPCAT_API_WHITELIST.join(', ') + '）')
       }
-      const params = typeof a.params === 'object' && a.params !== null ? a.params as Record<string, unknown> : {}
+      const params = typeof a.params === 'object' && a.params !== null ? { ...a.params as Record<string, unknown> } : {}
+      // 模型只给本机路径：直通接口的路径参数在这里读成 base64，NapCat 不需要访问该路径。
+      const local = NAPCAT_LOCAL_FILES[a.action]
+      if (local !== undefined) {
+        const value = params[local.field]
+        if (typeof value === 'string' && isLocalPath(value)) {
+          params[local.field] = await encodeLocalFile(value, limits[local.limit], await mediaRoots(bridge, exec))
+        }
+      }
       return await connection.call(a.action, params) as JsonValue
     },
   }))
@@ -138,16 +157,22 @@ export function registerTools(
     parameters: {
       chat_id: { type: 'string', description: '目标群会话 group:<群号>；省略时默认当前会话（须为群聊）' },
       count: { type: 'number', description: '拉取条数（≤50，默认 20）' },
-      message_seq: { type: 'number', description: '起始消息序号（翻页用，可选）' },
+      message_seq: { type: 'number', description: '继续向更早翻页的游标，取上一页返回的 next_seq；省略时返回最近消息' },
     },
     output: {
       schema: {
-        type: 'array',
-        items: { type: 'object', additionalProperties: true },
+        type: 'object',
+        properties: {
+          messages: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          next_seq: { oneOf: [{ type: 'number' }, { type: 'null' }] },
+        },
+        additionalProperties: false,
       },
       render: (_args: unknown, value: unknown) => {
-        const list = Array.isArray(value) ? value : []
-        return [{ type: 'text', text: list.length + ' 条历史消息' }]
+        const page = (value ?? {}) as { messages?: unknown; next_seq?: unknown }
+        const list = Array.isArray(page.messages) ? page.messages : []
+        const cursor = typeof page.next_seq === 'number' ? '，更早的游标 ' + page.next_seq : ''
+        return [{ type: 'text', text: list.length + ' 条历史消息' + cursor }]
       },
     },
     isConcurrencySafe: () => true,
@@ -157,11 +182,23 @@ export function registerTools(
       if (splitChatId(chatId).kind !== 'group') throw new Error('qq_group_history: 仅支持群聊')
       const groupId = Number(splitChatId(chatId).target)
       const count = Math.min(Math.max(typeof a.count === 'number' ? Math.floor(a.count) : 20, 1), 50)
-      const params: Record<string, unknown> = { group_id: groupId, count }
-      if (typeof a.message_seq === 'number') params.message_seq = a.message_seq
+      const params: Record<string, unknown> = {
+        group_id: groupId,
+        // NapCat 以传入游标为包含边界返回，多取一条抵消该边界，保证每页条数稳定。
+        count: typeof a.message_seq === 'number' ? count + 1 : count,
+      }
+      if (typeof a.message_seq === 'number') {
+        params.message_seq = String(a.message_seq)
+        // reverse_order 缺省为向更新方向取，翻到更早必须显式置 true。
+        params.reverse_order = true
+      }
       const data = await connection.call('get_group_msg_history', params) as { messages?: unknown }
-      const messages = Array.isArray(data.messages) ? data.messages : []
-      return messages.map(m => {
+      const raw = Array.isArray(data.messages) ? data.messages : []
+      // NapCat 以传入游标为包含边界返回，剔除该条避免与上一页重复。
+      const messages = typeof a.message_seq === 'number'
+        ? raw.filter(m => Number((m as Record<string, unknown>).message_seq) !== a.message_seq)
+        : raw
+      const rows = messages.map(m => {
         const msg = m as Record<string, unknown>
         const sender = (msg.sender ?? {}) as Record<string, unknown>
         const message = msg.message
@@ -176,6 +213,17 @@ export function registerTools(
           text: parsed.text,
         }
       })
+      let nextSeq: number | null = null
+      let earliest = Infinity
+      for (const m of messages) {
+        const msg = m as Record<string, unknown>
+        const time = Number(msg.time)
+        if (msg.message_seq != null && Number.isFinite(time) && time < earliest) {
+          earliest = time
+          nextSeq = Number(msg.message_seq)
+        }
+      }
+      return { messages: rows, next_seq: nextSeq }
     },
   }))
 

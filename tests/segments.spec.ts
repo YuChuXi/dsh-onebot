@@ -5,10 +5,10 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { detectMention, faceData, fillMentionNames, parseMessage, renderMessage, renderSegment } from '../src/onebot/segments.js'
+import { detectMention, fillMentionNames, parseMessage, renderMessage, renderSegment } from '../src/onebot/segments.js'
 import { formatRecords, messageRecord, renderRecord, systemRecord } from '../src/onebot/records.js'
 import { dormancyKey, isSleeping, sleepWindowKey } from '../src/inbound/sleep.js'
-import { faceId, faceName } from '../src/onebot/faces.js'
+import { faceName } from '../src/onebot/faces.js'
 
 describe('parseMessage', () => {
   it('keeps text segments separate and gives every media ref its segment index', () => {
@@ -149,13 +149,9 @@ describe('fillMentionNames', () => {
 })
 
 describe('faces', () => {
-  it('maps ids and names both ways without guessing', () => {
+  it('maps ids to names without guessing', () => {
     expect(faceName('14')).toBe('微笑')
-    expect(faceId('微笑')).toBe('14')
     expect(faceName('999999')).toBeUndefined()
-    expect(faceId('不存在')).toBeUndefined()
-    expect(faceData(undefined, '赞')).toEqual({ id: '76', name: '赞' })
-    expect(faceData(undefined, undefined)).toBeUndefined()
   })
 })
 

@@ -291,7 +291,9 @@ export declare class InboundPipeline {
      *   peek (boolean): 只读（休眠唤醒），不消费系统事件缓冲、不推进水位。
      *
      * Returns:
-     *   Promise<{ entries: WindowEntry[]; truncated: boolean }>: 窗口记录与是否截断。
+     *   Promise<{ entries: WindowEntry[]; truncated: boolean; cursor: number | null }>:
+     *   窗口记录、是否截断，以及截断时可继续向前翻的游标（窗口最早一条的
+     *   message_seq；未截断时为 null）。
      *
      * Callers:
      *   - `processInbound`、`sleepTurn`。

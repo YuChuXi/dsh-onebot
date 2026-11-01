@@ -288,7 +288,11 @@ export class InboundPipeline {
     // 可选的截断说明、窗口记录，触发事件永远在最后。
     const window = await this.recentMessages(chatId, groupId, inbound.notice === undefined ? inbound.message : undefined)
     const records: ConversationRecord[] = []
-    if (window.truncated) records.push(systemRecord('更早的消息已省略'))
+    if (window.truncated) {
+      records.push(systemRecord(window.cursor === null
+        ? '更早的消息已省略'
+        : '更早的消息已省略；需要时可调用 qq_group_history 并传 message_seq=' + window.cursor + ' 继续取更早的消息'))
+    }
     for (const entry of window.entries) {
       if (entry.notice !== undefined) records.push(entry.notice)
       else if (entry.message !== undefined) records.push(await this.recordOf(entry.message, chatId))
@@ -645,7 +649,9 @@ export class InboundPipeline {
    *   peek (boolean): 只读（休眠唤醒），不消费系统事件缓冲、不推进水位。
    *
    * Returns:
-   *   Promise<{ entries: WindowEntry[]; truncated: boolean }>: 窗口记录与是否截断。
+   *   Promise<{ entries: WindowEntry[]; truncated: boolean; cursor: number | null }>:
+   *   窗口记录、是否截断，以及截断时可继续向前翻的游标（窗口最早一条的
+   *   message_seq；未截断时为 null）。
    *
    * Callers:
    *   - `processInbound`、`sleepTurn`。
@@ -655,11 +661,15 @@ export class InboundPipeline {
     groupId: string,
     trigger: RawMessage | undefined,
     peek = false,
-  ): Promise<{ entries: WindowEntry[]; truncated: boolean }> {
+  ): Promise<{ entries: WindowEntry[]; truncated: boolean; cursor: number | null }> {
     const total = this.ctx.config.recentMessages ?? 50
     // 私聊没有群历史可拉：窗口就是这一条触发消息。
     if (groupId === '' || total <= 0) {
-      return { entries: trigger === undefined ? [] : [{ time: triggerTimeOf(trigger, this.now()), message: trigger }], truncated: false }
+      return {
+        entries: trigger === undefined ? [] : [{ time: triggerTimeOf(trigger, this.now()), message: trigger }],
+        truncated: false,
+        cursor: null,
+      }
     }
     const keep = Math.max(0, total - 1)
     let messages: RawMessage[]
@@ -672,7 +682,11 @@ export class InboundPipeline {
       // 群历史是外部接口：拿不到就只注入触发消息，本回合照常回答。
       this.ctx.log('warn', 'get_group_msg_history failed: ' + describeError(error))
       currentTrace()?.emit('history', { ok: false, reason: TRACE_REASONS.recentHistoryFailed })
-      return { entries: trigger === undefined ? [] : [{ time: triggerTimeOf(trigger, this.now()), message: trigger }], truncated: false }
+      return {
+        entries: trigger === undefined ? [] : [{ time: triggerTimeOf(trigger, this.now()), message: trigger }],
+        truncated: false,
+        cursor: null,
+      }
     }
     const currentId = String(trigger?.message_id ?? '')
     const triggerTime = triggerTimeOf(trigger, this.now())
@@ -723,7 +737,10 @@ export class InboundPipeline {
     const truncated = watermarkMissed
       || (anchorTime > 0 && (entries.length > keep || (pageFull && oldestFetched > anchorTime)))
     const window = keep === 0 ? [] : entries.slice(-keep)
-    return { entries: window, truncated }
+    // 窗口按时间升序，第一条带 seq 的历史消息即窗口最早一条，作为向前翻页的起点。
+    const earliest = truncated ? window.find(entry => entry.message?.message_seq != null) : undefined
+    const cursor = earliest === undefined ? null : Number(earliest.message!.message_seq)
+    return { entries: window, truncated, cursor }
   }
 
   /**

@@ -31,14 +31,23 @@ async function makeHarness() {
   await Promise.all([mkdir(mediaDir), mkdir(workspace), mkdir(otherDir), mkdir(outside)])
 
   const calls: Array<{ action: string; params: Record<string, unknown> }> = []
+  const connection = {
+    call: async (action: string, params: Record<string, unknown>) => {
+      calls.push({ action, params })
+      if (action === 'get_group_msg_history') {
+        return {
+          messages: [
+            { message_id: 5, message_seq: 5, time: 1, sender: { user_id: 10001, nickname: 'a' }, message: [{ type: 'text', data: { text: 'older' } }] },
+            { message_id: 10, message_seq: 10, time: 2, sender: { user_id: 10001, nickname: 'a' }, message: [{ type: 'text', data: { text: 'hi' } }] },
+          ],
+        }
+      }
+      return { message_id: 42 }
+    },
+  }
   const bridge = new ChatBridge({
     ctx: new Context(),
-    connection: {
-      call: async (action: string, params: Record<string, unknown>) => {
-        calls.push({ action, params })
-        return { message_id: 42 }
-      },
-    } as never,
+    connection: connection as never,
     media: {} as never,
     transcriber: {} as never,
     agents: {} as never,
@@ -82,7 +91,7 @@ async function makeHarness() {
       return () => undefined
     },
   } as never)
-  registerTools(ctx, bridge, {} as never, {
+  registerTools(ctx, bridge, connection as never, {
     maxImageBytes: 1_000_000,
     maxVoiceBytes: 1_000_000,
     maxFileBytes: 1_000_000,
@@ -171,6 +180,101 @@ describe('qq_send_* local-path outbound gate (M1-A3b)', () => {
     const result = await h.tool('qq_send_image').execute({ sources: ['https://example.com/pic.jpg'] }, h.exec(sessionId)) as { sent: boolean }
     expect(result.sent).toBe(true)
     expect(h.sentSegment()).toMatchObject({ type: 'image', data: { url: 'https://example.com/pic.jpg' } })
+  })
+})
+
+describe('qq_group_history paging', () => {
+  it('drops the inclusive cursor from the next page and returns a usable cursor', async () => {
+    const h = await makeHarness()
+    const sessionId = 'acc-history'
+    h.seed(sessionId, 'member')
+    const page = await h.tool('qq_group_history').execute({ message_seq: 10 }, h.exec(sessionId)) as {
+      messages: Array<Record<string, unknown>>
+      next_seq: number | null
+    }
+    expect(page.messages).toHaveLength(1)
+    expect(page.messages[0]).toMatchObject({ message_id: '5', text: 'older' })
+    expect(page.messages[0]).not.toHaveProperty('message_seq')
+    expect(page.next_seq).toBe(5)
+    const call = h.calls.find(c => c.action === 'get_group_msg_history')
+    expect(call?.params).toMatchObject({ group_id: 20002, count: 21, message_seq: '10', reverse_order: true })
+  })
+})
+
+describe('segment adapters on the send path', () => {
+  it('translates a face name into the id NapCat requires', async () => {
+    const h = await makeHarness()
+    const sessionId = 'acc-face'
+    h.seed(sessionId, 'member')
+    await h.tool('qq_send_message').execute({ segments: [{ type: 'face', data: { name: '微笑' } }] }, h.exec(sessionId))
+    expect(h.sentSegment()).toMatchObject({ type: 'face', data: { id: '14', name: '微笑' } })
+  })
+
+  it('keeps a face written with an id and fills its name', async () => {
+    const h = await makeHarness()
+    const sessionId = 'acc-face-id'
+    h.seed(sessionId, 'member')
+    await h.tool('qq_send_message').execute({ segments: [{ type: 'face', data: { id: '76' } }] }, h.exec(sessionId))
+    expect(h.sentSegment()).toMatchObject({ type: 'face', data: { id: '76', name: '赞' } })
+  })
+
+  it('keeps a partial mface instead of dropping it', async () => {
+    const h = await makeHarness()
+    const sessionId = 'acc-mface'
+    h.seed(sessionId, 'member')
+    const result = await h.tool('qq_send_message').execute({
+      segments: [
+        { type: 'text', data: { text: '看看' } },
+        { type: 'mface', data: { summary: '[贴纸]', emoji_id: 'abc' } },
+      ],
+    }, h.exec(sessionId)) as { note?: string }
+    expect(result.note).toBeUndefined()
+    const sent = h.calls.find(c => c.action === 'send_msg')
+    expect(JSON.stringify(sent?.params)).toContain('mface')
+  })
+
+  it('keeps the name on an outbound at segment', async () => {
+    const h = await makeHarness()
+    const sessionId = 'acc-at'
+    h.seed(sessionId, 'member')
+    await h.tool('qq_send_message').execute({
+      segments: [{ type: 'at', data: { qq: '10002', name: '机器人' } }],
+    }, h.exec(sessionId))
+    expect(h.sentSegment()).toMatchObject({ type: 'at', data: { qq: '10002', name: '机器人' } })
+  })
+
+  it('restores rendered reply and forward bodies into segment arrays', async () => {
+    const h = await makeHarness()
+    const sessionId = 'acc-nested'
+    h.seed(sessionId, 'member')
+    await h.tool('qq_send_message').execute({
+      segments: [
+        { type: 'reply', data: { id: '99', message: { qq: '1', nickname: 'a', message: 'hi' } } },
+        { type: 'forward', data: { id: 'f1', messages: [{ user_id: '1', nickname: 'a', message: ['hi', { type: 'face', data: { id: '14' } }] }] } },
+      ],
+    }, h.exec(sessionId))
+    const sent = h.calls.find(c => c.action === 'send_msg')?.params as { message: Array<Record<string, unknown>> }
+    const reply = sent.message.find(segment => segment.type === 'reply') as { data: { message: { message: unknown } } }
+    expect(reply.data.message.message).toEqual([{ type: 'text', data: { text: 'hi' } }])
+    const forward = sent.message.find(segment => segment.type === 'forward') as { data: { messages: Array<{ message: unknown }> } }
+    expect(forward.data.messages[0].message).toEqual([
+      { type: 'text', data: { text: 'hi' } },
+      { type: 'face', data: { id: '14', name: '微笑' } },
+    ])
+  })
+
+  it('reads a direct NapCat upload path into base64 on the plugin host', async () => {
+    const h = await makeHarness()
+    const sessionId = 'acc-upload'
+    h.seed(sessionId, 'admin')
+    const target = join(h.workspace, 'a.txt')
+    await writeFile(target, 'upload-data')
+    await h.tool('qq_napcat_api').execute({
+      action: 'upload_group_file',
+      params: { group_id: 20001, file: target, name: 'a.txt' },
+    }, h.exec(sessionId))
+    const call = h.calls.find(c => c.action === 'upload_group_file')
+    expect(call?.params.file).toBe('base64://' + Buffer.from('upload-data').toString('base64'))
   })
 })
 

@@ -11,6 +11,8 @@ import type { NameResolver } from './notice.js';
 export interface RawMessage {
     user_id?: string | number;
     message_id?: string | number;
+    /** 历史消息的短 id，get_group_msg_history 的翻页游标；事件推送里没有该字段。 */
+    message_seq?: string | number;
     time?: string | number;
     message?: IncomingSegment[];
     role?: string;

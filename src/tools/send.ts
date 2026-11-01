@@ -8,8 +8,9 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 
 import type { ChatBridge } from '../bridge/index.js'
-import { fileToBase64, isUrl } from '../media/store.js'
-import { MEDIA_KINDS, mediaKindOf } from '../media/kinds.js'
+import { isUrl } from '../media/store.js'
+import { normalizeSegment } from '../onebot/segments.js'
+import type { SegmentSendContext } from '../onebot/segment-types/registry.js'
 import type { OutboundSegment } from '../outbound/index.js'
 import { mediaRoots, resolveChat, type MediaLimits, type RegisterTool } from './shared.js'
 
@@ -21,33 +22,6 @@ function sendOutput() {
       const v = value as { messageId?: string | null }
       return [{ type: 'text' as const, text: v.messageId != null ? '已发送（message_id=' + v.messageId + '）' : '已发送' }]
     },
-  }
-}
-
-/**
- * Read one local media file behind the outbound fence, translating the
- * fence refusal (which reaches the model verbatim) into an actionable
- * hint; size-cap and OS errors keep their original message.
- *
- * Args:
- *   path (string): 本机媒体文件路径。
- *   maxBytes (number): 该媒体类型的大小上限。
- *   allowedRoots (string[]): 允许读取的媒体根目录。
- *
- * Returns:
- *   Promise<string>: base64 编码的文件内容。
- *
- * Callers:
- *   - `tools/send.ts:outboundSegments` 与各媒体发送工具的 build。
- */
-async function fencedMediaFile(path: string, maxBytes: number, allowedRoots: string[]): Promise<string> {
-  try {
-    return await fileToBase64(path, maxBytes, allowedRoots)
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('path not allowed or does not exist')) {
-      throw new Error('本地路径不在允许的媒体目录内（管理员回合可另读会话工作区），或文件不存在：' + path)
-    }
-    throw error
   }
 }
 
@@ -64,9 +38,10 @@ const CHAT_ID_PARAM = {
 }
 
 /**
- * 把模型给的 segments 参数规范成可发送的段数组。
- * 接受字符串、单个段或混合数组；媒体 file 是本机路径时转 base64
- * （NapCat 可能在另一台机器上），已是 base64:// / file:// / http(s) 的原样发送。
+ * 把模型给的 segments 参数交给段类型注册表归一化，得到可发送的段数组。
+ *
+ * 每个段类型的入站解析与出站转换写在同一个适配器里；这里只负责接受
+ * 字符串 / 单段 / 混合数组三种输入形状，并收集无法发送的段名。
  *
  * Args:
  *   value (unknown): 工具参数里的 segments（或 text）。
@@ -87,6 +62,7 @@ async function outboundSegments(
   const items = typeof value === 'string'
     ? [value]
     : Array.isArray(value) ? value : value === undefined || value === null ? [] : [value]
+  const ctx: SegmentSendContext = { allowedRoots, ...limits }
   const segments: OutboundSegment[] = []
   const dropped: string[] = []
   for (const item of items) {
@@ -98,38 +74,19 @@ async function outboundSegments(
       dropped.push(String(item))
       continue
     }
-    const segment = item as { type?: unknown; data?: Record<string, unknown> }
-    const type = typeof segment.type === 'string' ? segment.type : ''
-    const data = segment.data ?? {}
-    if (type === 'text') {
-      const text = typeof data.text === 'string' ? data.text : ''
-      if (text !== '') segments.push({ type: 'text', data: { text } })
+    const raw = item as { type?: unknown; data?: unknown }
+    const type = typeof raw.type === 'string' ? raw.type : ''
+    if (type === '') {
+      dropped.push('未知段')
       continue
     }
-    if (type === 'at') {
-      const qq = typeof data.qq === 'string' ? data.qq : ''
-      if (qq !== '') segments.push({ type: 'at', data: { qq } })
-      else dropped.push('at（缺 qq）')
+    const data = typeof raw.data === 'object' && raw.data !== null ? raw.data as Record<string, unknown> : {}
+    const segment = await normalizeSegment({ type, data }, ctx)
+    if (segment === undefined) {
+      dropped.push(type)
       continue
     }
-    const kind = mediaKindOf({ type })
-    if (kind === undefined) {
-      dropped.push(type === '' ? '未知段' : type)
-      continue
-    }
-    const spec = MEDIA_KINDS[kind]
-    const file = typeof data.file === 'string' ? data.file : ''
-    const url = typeof data.url === 'string' ? data.url : ''
-    if (file === '') {
-      if (url !== '') segments.push({ type: spec.segment, data: { url } })
-      else dropped.push(spec.label + '（缺 file / url）')
-      continue
-    }
-    if (file.startsWith('base64://') || file.startsWith('file://') || isUrl(file)) {
-      segments.push({ type: spec.segment, data: { file } })
-      continue
-    }
-    segments.push({ type: spec.segment, data: { file: await fencedMediaFile(file, limits[spec.limit], allowedRoots) } })
+    segments.push(segment)
   }
   return { segments, dropped }
 }
@@ -264,14 +221,18 @@ export function registerSendTools(register: RegisterTool, bridge: ChatBridge, li
       const sources = Array.isArray(a.sources) ? a.sources.filter((s): s is string => typeof s === 'string') : []
       if (sources.length === 0) throw new Error('qq_send_image: sources 不能为空')
       if (sources.length > 9) throw new Error('qq_send_image: 一次最多 9 张图片')
+      const ctx: SegmentSendContext = { allowedRoots: env.roots, ...env.limits }
       const segments: OutboundSegment[] = []
       if (typeof a.caption === 'string' && a.caption !== '') {
         segments.push({ type: 'text', data: { text: a.caption } })
       }
       for (const source of sources) {
-        segments.push(isUrl(source)
-          ? { type: 'image', data: { url: source } }
-          : { type: 'image', data: { file: await fencedMediaFile(source, env.limits.maxImageBytes, env.roots) } })
+        const segment = await normalizeSegment(
+          isUrl(source) ? { type: 'image', data: { url: source } } : { type: 'image', data: { file: source } },
+          ctx,
+        )
+        if (segment === undefined) throw new Error('qq_send_image: 无法读取图片 ' + source)
+        segments.push(segment)
       }
       return { kind: 'segments', messages: [segments] }
     },
@@ -286,10 +247,12 @@ export function registerSendTools(register: RegisterTool, bridge: ChatBridge, li
     build: async (a, env) => {
       const path = typeof a.path === 'string' ? a.path : ''
       if (path === '') throw new Error('qq_send_voice: path 必填')
-      return {
-        kind: 'segments',
-        messages: [[{ type: 'record', data: { file: await fencedMediaFile(path, env.limits.maxVoiceBytes, env.roots) } }]],
-      }
+      const segment = await normalizeSegment(
+        { type: 'record', data: { file: path } },
+        { allowedRoots: env.roots, ...env.limits },
+      )
+      if (segment === undefined) throw new Error('qq_send_voice: 无法读取音频 ' + path)
+      return { kind: 'segments', messages: [[segment]] }
     },
   })
 
@@ -302,10 +265,12 @@ export function registerSendTools(register: RegisterTool, bridge: ChatBridge, li
     build: async (a, env) => {
       const path = typeof a.path === 'string' ? a.path : ''
       if (path === '') throw new Error('qq_send_video: path 必填')
-      return {
-        kind: 'segments',
-        messages: [[{ type: 'video', data: { file: await fencedMediaFile(path, env.limits.maxFileBytes, env.roots) } }]],
-      }
+      const segment = await normalizeSegment(
+        { type: 'video', data: { file: path } },
+        { allowedRoots: env.roots, ...env.limits },
+      )
+      if (segment === undefined) throw new Error('qq_send_video: 无法读取视频 ' + path)
+      return { kind: 'segments', messages: [[segment]] }
     },
   })
 
@@ -320,10 +285,12 @@ export function registerSendTools(register: RegisterTool, bridge: ChatBridge, li
       const path = typeof a.path === 'string' ? a.path : ''
       if (path === '') throw new Error('qq_send_file: path 必填')
       const name = typeof a.name === 'string' && a.name !== '' ? a.name : path.split('/').pop() ?? 'file'
-      return {
-        kind: 'segments',
-        messages: [[{ type: 'file', data: { file: await fencedMediaFile(path, env.limits.maxFileBytes, env.roots), name } }]],
-      }
+      const segment = await normalizeSegment(
+        { type: 'file', data: { file: path, name } },
+        { allowedRoots: env.roots, ...env.limits },
+      )
+      if (segment === undefined) throw new Error('qq_send_file: 无法读取文件 ' + path)
+      return { kind: 'segments', messages: [[segment]] }
     },
   })
 

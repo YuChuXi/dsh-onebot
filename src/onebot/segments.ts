@@ -1,15 +1,18 @@
 /**
  * OneBot 11 消息段：类型化的段模型、入站解析、模型可见渲染与 @ 提及判定。
  *
- * 内部一律使用 OneBot 的段数组形态（`{ type, data }`），但每个已知类型的
- * `data` 都有独立类型，按 `type` 判别后可穷尽处理——新增段类型时编译器会
- * 指出每一处需要照顾的分支，而不是在运行时查表。
+ * 内部一律使用 OneBot 的段数组形态（`{ type, data }`），每个已知类型的
+ * `data` 都有独立类型；入站解析与出站归一化由 `segment-types/` 下各自的
+ * 适配器提供，这里只做查找、渲染与整条消息的组装。
  *
  * 这里没有 CQ 字符串层：消息只按段数组进出。
  * @module dsh-onebot/segments
  */
-import { faceId, faceName } from './faces.js'
-import { mediaKindOf, mediaLabel, type MediaKind } from '../media/kinds.js'
+import { mediaKindOf, type MediaKind } from '../media/kinds.js'
+import type { OutboundSegment } from '../outbound/index.js'
+import { scalar, text } from './segment-types/primitives.js'
+import { segmentTypeOf, type SegmentSendContext } from './segment-types/registry.js'
+import './segment-types/index.js'
 
 export { MEDIA_KINDS, mediaKindOf, mediaLabel } from '../media/kinds.js'
 export type { MediaKind, MediaKindSpec, MediaSegmentType } from '../media/kinds.js'
@@ -122,49 +125,9 @@ export function incomingSegments(value: unknown): IncomingSegment[] {
   return Array.isArray(value) ? value as IncomingSegment[] : []
 }
 
-/** 段 data 里取字符串，空值归为 undefined。 */
-function text(value: unknown): string | undefined {
-  return typeof value === 'string' && value !== '' ? value : undefined
-}
-
-/** 段 data 里取标量（字符串或数字）。 */
-function scalar(value: unknown): string | number | undefined {
-  return typeof value === 'string' || typeof value === 'number' ? value : undefined
-}
-
-/** 只保留指定属性，空值（undefined / null / ''）丢弃。 */
-function pickFields(data: Record<string, unknown>, fields: readonly string[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const key of fields) {
-    const value = data[key]
-    if (value !== undefined && value !== null && value !== '') out[key] = value
-  }
-  return out
-}
-
-/** mface 段保留的属性（重放商城表情需要的五件套）。 */
-const MFACE_FIELDS: readonly string[] = ['summary', 'emoji_id', 'emoji_package_id', 'key', 'url']
-
-/** 已知段类型 → 模型可见段保留的字段。text / face / mface / 媒体段由各自分支处理。 */
-const SEGMENT_FIELDS: Partial<Record<SegmentType, readonly string[]>> = {
-  forward: ['id', 'resId'],
-  dice: ['result'],
-  rps: ['result'],
-  json: ['data'],
-  xml: ['data'],
-  share: ['url', 'title', 'content', 'image'],
-  contact: ['type', 'id'],
-  location: ['lat', 'lon', 'title', 'content'],
-  music: ['type', 'id', 'url', 'audio', 'title', 'content', 'image'],
-  node: ['id', 'user_id', 'nickname', 'content', 'time'],
-  markdown: ['content'],
-  tts: ['text'],
-  cardimage: ['file'],
-}
-
 /**
- * 把一个入站段解析成管线段：媒体段换成空壳 data（等字节回填），
- * 表情补中文名，其余已知类型按字段表挑属性，未知类型整段保留。
+ * 把一个入站段解析成模型可见段：具体转换由该类型的适配器提供，
+ * 未注册的类型整段保留并记住原始类型名。
  *
  * Args:
  *   raw (IncomingSegment): OneBot 原始段。
@@ -176,29 +139,80 @@ const SEGMENT_FIELDS: Partial<Record<SegmentType, readonly string[]>> = {
  *   - `parseMessage`。
  */
 export function parseSegment(raw: IncomingSegment): Segment {
-  const data = raw.data ?? {}
-  // 媒体段先占位：段顺序与发送方一致，字节到手后按同一位置回填。
-  if (mediaKindOf({ type: raw.type }) !== undefined) return { type: raw.type, data: {} } as Segment
-  switch (raw.type) {
-    case 'text':
-      return { type: 'text', data: { text: String(data.text ?? '') } }
-    case 'at':
-      return { type: 'at', data: { qq: String(data.qq ?? ''), ...pickFields(data, ['name']) } as SegmentData['at'] }
-    case 'reply':
-      return { type: 'reply', data: { id: String(data.id ?? '') } }
-    case 'face': {
-      const id = text(data.id) ?? (data.id !== undefined && data.id !== '' ? String(data.id) : undefined)
-      const name = text(data.name) ?? (id !== undefined ? faceName(id) : undefined)
-      return { type: 'face', data: { ...(id !== undefined ? { id } : {}), ...(name !== undefined ? { name } : {}) } }
-    }
-    case 'mface':
-      return { type: 'mface', data: pickFields(data, MFACE_FIELDS) as SegmentData['mface'] }
-    default: {
-      const fields = SEGMENT_FIELDS[raw.type as SegmentType]
-      if (fields === undefined) return { type: 'unknown', data: { ...data, $type: raw.type } }
-      return { type: raw.type as SegmentType, data: pickFields(data, fields) } as Segment
-    }
+  const segment = segmentTypeOf(raw.type)?.segment?.(raw)
+  if (segment !== undefined) return segment
+  return { type: 'unknown', data: { ...(raw.data ?? {}), $type: raw.type } }
+}
+
+/**
+ * 把模型给出的段归一成可发送形态：与入站同源，转换由类型适配器提供。
+ *
+ * Args:
+ *   raw (IncomingSegment): 模型传入的段。
+ *   ctx (SegmentSendContext): 媒体围栏根与各媒体类型的大小上限。
+ *
+ * Returns:
+ *   Promise<OutboundSegment | undefined>: 可发送段；不可发送时返回 undefined。
+ *
+ * Callers:
+ *   - `src/tools/send.ts:outboundSegments`。
+ */
+export async function normalizeSegment(
+  raw: IncomingSegment,
+  ctx: SegmentSendContext,
+): Promise<OutboundSegment | undefined> {
+  const adapter = segmentTypeOf(raw.type)
+  if (adapter?.normalize === undefined) return undefined
+  return await adapter.normalize(raw.data ?? {}, { ...ctx, restore: value => restoreMessage(value, ctx) })
+}
+
+/**
+ * 渲染值的逆还原：解包成段数组后逐段走同一张注册表。
+ *
+ * 与 `renderMessage` 对称——字符串是 text 段的渲染值，段对象按类型收下，
+ * 数组逐项展开；每一段都交给它自己的适配器，管线不判断具体类型。
+ *
+ * Args:
+ *   value (unknown): 渲染后的消息体。
+ *   ctx (SegmentSendContext): 媒体围栏与大小上限。
+ *
+ * Returns:
+ *   Promise<OutboundSegment[]>: 可发送段数组。
+ *
+ * Callers:
+ *   - `normalizeSegment`（作为出站上下文的 `restore`）。
+ */
+async function restoreMessage(value: unknown, ctx: SegmentSendContext): Promise<OutboundSegment[]> {
+  const out: OutboundSegment[] = []
+  for (const raw of unpackRendered(value)) {
+    const normalized = await normalizeSegment(raw, ctx)
+    if (normalized !== undefined) out.push(normalized)
   }
+  return out
+}
+
+/**
+ * 把渲染值拆成原始段形状：字符串是 text，段对象原样，数组逐项展开。
+ *
+ * Args:
+ *   value (unknown): 渲染后的消息体。
+ *
+ * Returns:
+ *   IncomingSegment[]: 待归一化的段。
+ *
+ * Callers:
+ *   - `restoreMessage`。
+ */
+function unpackRendered(value: unknown): IncomingSegment[] {
+  if (typeof value === 'string') return [{ type: 'text', data: { text: value } }]
+  if (Array.isArray(value)) return value.flatMap(item => unpackRendered(item))
+  if (value === null || typeof value !== 'object') return []
+  const segment = value as { type?: unknown; data?: unknown }
+  if (typeof segment.type !== 'string' || segment.type === '') return []
+  const data = typeof segment.data === 'object' && segment.data !== null
+    ? segment.data as Record<string, unknown>
+    : {}
+  return [{ type: segment.type, data }]
 }
 
 /**
@@ -278,26 +292,6 @@ export function parseMessage(segments: IncomingSegment[] | undefined): ParsedMes
 }
 
 /**
- * 把一段文本按表情名/表情 id 规范化成 face 段（模型写出时用）。
- *
- * Args:
- *   id (string | undefined): 表情 id。
- *   name (string | undefined): 表情中文名。
- *
- * Returns:
- *   SegmentData['face'] | undefined: 两端至少有一个可用的表情数据。
- *
- * Callers:
- *   - `src/onebot/segments.ts:faceData`：工具参数里的 face 段。
- */
-export function faceData(id: string | undefined, name: string | undefined): SegmentData['face'] | undefined {
-  const resolvedId = id !== undefined && id !== '' ? id : (name !== undefined ? faceId(name) : undefined)
-  if (resolvedId === undefined) return name !== undefined ? { name } : undefined
-  const resolvedName = name !== undefined && name !== '' ? name : faceName(resolvedId)
-  return { id: resolvedId, ...(resolvedName !== undefined ? { name: resolvedName } : {}) }
-}
-
-/**
  * 给 @ 提及段补显示名；未知 id 保持裸号码。
  *
  * Args:
@@ -334,53 +328,31 @@ export function fillMentionNames(segments: Segment[], names: Map<string, string>
  *   - `src/inbound/index.ts:InboundPipeline.processInbound`：群聊提及闸门。
  */
 export function detectMention(segments: Segment[] | undefined, selfId: string, botQQ: string): boolean {
-  const bot = selfId !== '' ? selfId : botQQ
-  if (bot === '' || !Array.isArray(segments)) return false
-  return segments.some(segment => segment.type === 'at'
-    && (String(segment.data.qq) === bot || String(segment.data.qq) === 'all'))
-}
-
-/** 段是否带本地文件（媒体是否已取到）。 */
-function hasFile(segment: Segment): boolean {
-  if (mediaKindOf(segment) === undefined) return true
-  const data = segment.data as MediaData
-  return data.file !== undefined && data.file !== ''
+  if (!Array.isArray(segments)) return false
+  return segments.some(segment => segmentTypeOf(segment.type)?.wakes?.(segment, selfId, botQQ) === true)
 }
 
 /**
- * 把一个段渲染成模型可见形态：媒体段没有本地文件时变成明确的「未取到」说明，
- * 引用的被引消息与转发的节点列表递归渲染。
+ * 把一个段渲染成模型可见形态：具体形态由该类型的适配器决定。
  *
  * Args:
  *   segment (Segment): 段。
  *
  * Returns:
- *   unknown: 文本 → 裸字符串；其余 → 段对象（内嵌消息已渲染）。
+ *   unknown: 模型看到的值；未注册的类型还原成 OneBot 原形状。
  *
  * Callers:
  *   - `renderMessage`。
  */
 export function renderSegment(segment: Segment): unknown {
-  if (segment.type === 'text') return segment.data.text
   if (segment.type === 'unknown') {
     // 还原 OneBot 原形状：模型拿到的是它认识的段类型名与全部原始属性。
     const { $type, ...rest } = segment.data
     return { type: $type, data: rest }
   }
-  if (!hasFile(segment)) {
-    const kind = mediaKindOf(segment)
-    return '(' + (kind !== undefined ? mediaLabel(kind) : '媒体') + '未取到)'
-  }
-  if (segment.type === 'reply' && segment.data.message !== undefined) {
-    return { type: 'reply', data: { ...segment.data, message: renderRecordValue(segment.data.message) } }
-  }
-  if (segment.type === 'forward' && Array.isArray(segment.data.messages)) {
-    return {
-      type: 'forward',
-      data: { ...segment.data, messages: segment.data.messages.map(renderRecordValue) },
-    }
-  }
-  return segment
+  const render = segmentTypeOf(segment.type)?.render
+  if (render === undefined) return segment
+  return render(segment, { renderMessage, renderRecord: renderRecordValue })
 }
 
 /**
@@ -421,3 +393,4 @@ export function renderMessage(segments: Segment[]): unknown {
   const items = segments.map(renderSegment).filter(item => item !== '')
   return items.length === 1 ? items[0] : items
 }
+

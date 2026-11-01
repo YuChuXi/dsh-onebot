@@ -1,4 +1,17 @@
+/**
+ * OneBot 11 消息段：类型化的段模型、入站解析、模型可见渲染与 @ 提及判定。
+ *
+ * 内部一律使用 OneBot 的段数组形态（`{ type, data }`），每个已知类型的
+ * `data` 都有独立类型；入站解析与出站归一化由 `segment-types/` 下各自的
+ * 适配器提供，这里只做查找、渲染与整条消息的组装。
+ *
+ * 这里没有 CQ 字符串层：消息只按段数组进出。
+ * @module dsh-onebot/segments
+ */
 import { type MediaKind } from '../media/kinds.js';
+import type { OutboundSegment } from '../outbound/index.js';
+import { type SegmentSendContext } from './segment-types/registry.js';
+import './segment-types/index.js';
 export { MEDIA_KINDS, mediaKindOf, mediaLabel } from '../media/kinds.js';
 export type { MediaKind, MediaKindSpec, MediaSegmentType } from '../media/kinds.js';
 /** 一类媒体段共有的来源字段。 */
@@ -168,8 +181,8 @@ export interface ParsedMessage {
  */
 export declare function incomingSegments(value: unknown): IncomingSegment[];
 /**
- * 把一个入站段解析成管线段：媒体段换成空壳 data（等字节回填），
- * 表情补中文名，其余已知类型按字段表挑属性，未知类型整段保留。
+ * 把一个入站段解析成模型可见段：具体转换由该类型的适配器提供，
+ * 未注册的类型整段保留并记住原始类型名。
  *
  * Args:
  *   raw (IncomingSegment): OneBot 原始段。
@@ -181,6 +194,20 @@ export declare function incomingSegments(value: unknown): IncomingSegment[];
  *   - `parseMessage`。
  */
 export declare function parseSegment(raw: IncomingSegment): Segment;
+/**
+ * 把模型给出的段归一成可发送形态：与入站同源，转换由类型适配器提供。
+ *
+ * Args:
+ *   raw (IncomingSegment): 模型传入的段。
+ *   ctx (SegmentSendContext): 媒体围栏根与各媒体类型的大小上限。
+ *
+ * Returns:
+ *   Promise<OutboundSegment | undefined>: 可发送段；不可发送时返回 undefined。
+ *
+ * Callers:
+ *   - `src/tools/send.ts:outboundSegments`。
+ */
+export declare function normalizeSegment(raw: IncomingSegment, ctx: SegmentSendContext): Promise<OutboundSegment | undefined>;
 /**
  * 解析一条入站消息：得到模型可见段数组、待取字节的媒体引用与纯文本。
  *
@@ -194,20 +221,6 @@ export declare function parseSegment(raw: IncomingSegment): Segment;
  *   - `src/inbound/index.ts:InboundPipeline.parseOf`：每条消息只解析一次。
  */
 export declare function parseMessage(segments: IncomingSegment[] | undefined): ParsedMessage;
-/**
- * 把一段文本按表情名/表情 id 规范化成 face 段（模型写出时用）。
- *
- * Args:
- *   id (string | undefined): 表情 id。
- *   name (string | undefined): 表情中文名。
- *
- * Returns:
- *   SegmentData['face'] | undefined: 两端至少有一个可用的表情数据。
- *
- * Callers:
- *   - `src/onebot/segments.ts:faceData`：工具参数里的 face 段。
- */
-export declare function faceData(id: string | undefined, name: string | undefined): SegmentData['face'] | undefined;
 /**
  * 给 @ 提及段补显示名；未知 id 保持裸号码。
  *
@@ -238,14 +251,13 @@ export declare function fillMentionNames(segments: Segment[], names: Map<string,
  */
 export declare function detectMention(segments: Segment[] | undefined, selfId: string, botQQ: string): boolean;
 /**
- * 把一个段渲染成模型可见形态：媒体段没有本地文件时变成明确的「未取到」说明，
- * 引用的被引消息与转发的节点列表递归渲染。
+ * 把一个段渲染成模型可见形态：具体形态由该类型的适配器决定。
  *
  * Args:
  *   segment (Segment): 段。
  *
  * Returns:
- *   unknown: 文本 → 裸字符串；其余 → 段对象（内嵌消息已渲染）。
+ *   unknown: 模型看到的值；未注册的类型还原成 OneBot 原形状。
  *
  * Callers:
  *   - `renderMessage`。
