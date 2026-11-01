@@ -12,9 +12,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
-import { InboundRecorder, INBOX_FILE, inboxRotatedFile, redactDigits, toInboxFrame } from '../src/record.js'
-import type { InboxLine } from '../src/record.js'
-import { replayInbox } from '../src/replay.js'
+import { InboundRecorder, INBOX_FILE, inboxRotatedFile, redactDigits, toInboxFrame } from '../src/ops/record.js'
+import type { InboxLine } from '../src/ops/record.js'
+import { replayInbox } from '../src/ops/replay.js'
 
 import { makeHarness } from './helpers/bridge-harness.js'
 
@@ -160,7 +160,7 @@ describe('offline replay (src/replay.ts)', () => {
     const inbox = join(traceDir, 'in.jsonl')
     const lines = [
       JSON.stringify(toInboxFrame(privateEvent('你好') as never)),
-      JSON.stringify(toInboxFrame({ ...privateEvent('/help'), message_id: 5002 } as never)),
+      JSON.stringify(toInboxFrame({ ...privateEvent('/new'), message_id: 5002 } as never)),
       'not-json-garbage',
     ]
     writeFileSync(inbox, lines.join('\n') + '\n')
@@ -172,7 +172,7 @@ describe('offline replay (src/replay.ts)', () => {
     expect(report.total).toBe(3)
     expect(report.replayed).toBe(2)
     expect(report.skipped).toBe(1)
-    // /help is consumed by the command router → its reply send is intercepted
+    // /new is consumed by the command router → its reply send is intercepted
     // by the forced dry-run (no websocket, no real frame anywhere).
     expect(report.interceptedOutbound).toBeGreaterThanOrEqual(1)
     expect(report.entries).toHaveLength(2)
@@ -182,9 +182,8 @@ describe('offline replay (src/replay.ts)', () => {
       expect(entry.chain[0]!.stage).toBe('inbound')
       expect(entry.decision.reason ?? '').not.toBe('')
     }
-    // The dispatched message's chain carries dispatch ok:true; its decision
-    // tail may be a later outbound event (the /help reply is attributed to
-    // the last dispatch's traceId — the documented last-writer-wins rule).
+    // The dispatched message's chain carries dispatch ok:true; the command
+    // message ends on its own command decision (each round keeps its traceId).
     const dispatched = report.entries.find(e => e.chain.some(c => c.stage === 'dispatch'))!
     expect(dispatched.decision.ok).toBe(true)
     const commandEntry = report.entries.find(e => e.chain.some(c => c.stage === 'command'))!

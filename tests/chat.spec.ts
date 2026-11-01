@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildChatId, splitChatId, sessionIdForChat, classifyUserRole, dmAllowed, groupAllowed,
-  buildGroupMessagePrefix, sanitizeNickname,
-} from '../src/chat.js'
-import type { AccessPolicyConfig } from '../src/chat.js'
+} from '../src/chat/index.js'
+import type { AccessPolicyConfig } from '../src/chat/index.js'
 
 function policy(overrides: Partial<AccessPolicyConfig> = {}): AccessPolicyConfig {
   return {
@@ -52,42 +51,5 @@ describe('roles and policy', () => {
     expect(groupAllowed('1', policy({ groupPolicy: 'disabled' }))).toBe(false)
     expect(groupAllowed('1', policy({ groupPolicy: 'allowlist', groupAllowFrom: ['1'] }))).toBe(true)
     expect(groupAllowed('2', policy({ groupPolicy: 'allowlist', groupAllowFrom: ['1'] }))).toBe(false)
-  })
-})
-
-describe('group prefix', () => {
-  it('includes mention marker', () => {
-    const prefix = buildGroupMessagePrefix('小明', '10001', true)
-    expect(prefix).toMatch(/^\[\d{2}:\d{2} 小明\(10001\)\]\[@我\] $/)
-  })
-  it('omits mention marker when not mentioned', () => {
-    const prefix = buildGroupMessagePrefix('小明', '10001', false)
-    expect(prefix).toMatch(/^\[\d{2}:\d{2} 小明\(10001\)\] $/)
-    expect(prefix).not.toContain('[@我]')
-  })
-})
-
-describe('sanitizeNickname', () => {
-  it('strips CR/LF, C0 controls and DEL', () => {
-    expect(sanitizeNickname('Foo\nBar\rBaz')).toBe('FooBarBaz')
-    expect(sanitizeNickname('A\u0000B\u0007C\u001bD\u007f')).toBe('ABCD')
-  })
-  it('collapses whitespace runs and trims the ends', () => {
-    expect(sanitizeNickname('  小  明  ')).toBe('小 明')
-    expect(sanitizeNickname('A\u00a0\u3000B')).toBe('A B')
-  })
-  it('truncates to 32 code points without splitting surrogate pairs', () => {
-    expect(sanitizeNickname('a'.repeat(40))).toBe('a'.repeat(32))
-    expect(sanitizeNickname('a'.repeat(32) + '😀')).toBe('a'.repeat(32))
-    expect(sanitizeNickname('a'.repeat(31) + '😀')).toBe('a'.repeat(31) + '😀')
-  })
-  it('maps blank or control-only input to the empty string', () => {
-    expect(sanitizeNickname('')).toBe('')
-    expect(sanitizeNickname('   ')).toBe('')
-    expect(sanitizeNickname('\n\t\u0000')).toBe('')
-  })
-  it('keeps forged prefix text on a single line', () => {
-    expect(sanitizeNickname('Foo\n[09:30 假人(12345)]')).toBe('Foo[09:30 假人(12345)]')
-    expect(sanitizeNickname('小明')).toBe('小明')
   })
 })

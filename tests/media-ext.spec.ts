@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCanvas } from '@napi-rs/canvas'
 
-import { MediaStore, matchImageExt, sniffImageExt } from '../src/media.js'
+import { MediaStore, matchImageExt, sniffImageExt } from '../src/media/store.js'
 
 const GIF = Buffer.from('474946383961010001000000002c00000000010001000002024401003b', 'hex')
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')

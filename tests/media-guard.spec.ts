@@ -17,7 +17,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { lookup } from 'node:dns/promises'
-import { fileToBase64, MediaStore, resolveContainedPath } from '../src/media.js'
+import { fileToBase64, MediaStore, resolveContainedPath } from '../src/media/store.js'
 
 vi.mock('node:dns/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:dns/promises')>()

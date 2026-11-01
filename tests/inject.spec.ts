@@ -14,10 +14,10 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
 import { Config } from '../src/index.js'
-import { InjectChannel, INJECT_FILE, INTERCEPTED_MESSAGE_ID, MIN_INJECT_INTERVAL_MS } from '../src/inject.js'
-import { InboundRecorder, INBOX_FILE } from '../src/record.js'
-import { TraceSink } from '../src/trace.js'
-import type { TraceEvent } from '../src/trace.js'
+import { InjectChannel, INJECT_FILE, INTERCEPTED_MESSAGE_ID, MIN_INJECT_INTERVAL_MS } from '../src/inbound/inject.js'
+import { InboundRecorder, INBOX_FILE } from '../src/ops/record.js'
+import { TraceSink } from '../src/ops/trace.js'
+import type { TraceEvent } from '../src/ops/trace.js'
 
 import { makeHarness, makeEvent } from './helpers/bridge-harness.js'
 
@@ -103,15 +103,13 @@ describe('inject dry-run interception', () => {
     // dispatched) — but through the inject channel, not the socket.
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1), { timeout: 15_000 })
     expect(h.captured.followups[0]!.text).toContain('注入消息')
-    // Drive the agent round: the final reply after turn/end must ALSO be
-    // intercepted (v0.4.0 阶段 3 lesson — the async reply would otherwise reach QQ).
+    // Drive the agent round: a tool send from the injected chat must ALSO be
+    // intercepted (the async reply would otherwise reach QQ).
     const session = { id: h.sessionIds[0] }
     h.ctx.emit('session/event', session as never, makeEvent('turn/start', { turn: 1 }))
-    h.ctx.emit('session/event', session as never, makeEvent('assistant/message', {
-      turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: '注入回合的最终回复' }] },
-    }))
+    await h.say('注入回合的最终回复')
     h.ctx.emit('session/event', session as never, makeEvent('turn/end', { turn: 1, reason: { kind: 'completed' } }))
-    await vi.waitFor(() => expect(channel.getStats().intercepted).toBeGreaterThanOrEqual(2), { timeout: 15_000 })
+    await vi.waitFor(() => expect(channel.getStats().intercepted).toBeGreaterThanOrEqual(1), { timeout: 15_000 })
     // Zero outbound frames on the real socket: nothing was ever sent to QQ.
     const sendFrames = h.outbound.filter(f => String(f.action).startsWith('send_'))
     expect(sendFrames).toHaveLength(0)
@@ -120,7 +118,7 @@ describe('inject dry-run interception', () => {
     const injectEvents = lines.filter(e => e.stage === 'inject')
     expect(injectEvents.some(e => e.reason === '注入事件已进入真实管线')).toBe(true)
     const intercepted = injectEvents.filter(e => e.reason.includes('出站调用已拦截'))
-    expect(intercepted.length).toBeGreaterThanOrEqual(2)
+    expect(intercepted.length).toBeGreaterThanOrEqual(1)
     for (const event of intercepted) {
       expect(event.reason).toMatch(CJK)
     }
@@ -188,9 +186,7 @@ describe('inject dry-run interception', () => {
     })
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1), { timeout: 15_000 })
     const session = { id: h.sessionIds[0] }
-    h.ctx.emit('session/event', session as never, makeEvent('assistant/message', {
-      turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: '真发回复' }] },
-    }))
+    await h.say('真发回复')
     h.ctx.emit('session/event', session as never, makeEvent('turn/end', { turn: 1, reason: { kind: 'completed' } }))
     await vi.waitFor(() => {
       expect(h.outbound.some(f => f.action === 'send_msg' && JSON.stringify(f.params).includes('真发回复'))).toBe(true)
@@ -223,9 +219,7 @@ describe('inject dry-run interception', () => {
     h.sendText('真人消息')
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(2), { timeout: 15_000 })
     const session = { id: h.sessionIds[0] }
-    h.ctx.emit('session/event', session as never, makeEvent('assistant/message', {
-      turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: '真人回复' }] },
-    }))
+    await h.say('真人回复')
     h.ctx.emit('session/event', session as never, makeEvent('turn/end', { turn: 1, reason: { kind: 'completed' } }))
     await vi.waitFor(() => {
       expect(h.outbound.some(f => f.action === 'send_msg' && JSON.stringify(f.params).includes('真人回复'))).toBe(true)

@@ -8,8 +8,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
-import { SESSION_PREVIEW_MAX_CHARS, sessionPreviewFromEvents, shortSessionId, truncatePreview } from '../src/commands.js'
-import type { SessionPreviewEvent } from '../src/bridge.js'
+import { SESSION_PREVIEW_MAX_CHARS, sessionPreviewFromEvents, shortSessionId, truncatePreview } from '../src/commands/preview.js'
+import type { SessionPreviewEvent } from '../src/bridge/config.js'
 import { makeCmdHarness, makeEvent } from './helpers/bridge-harness.js'
 
 /** A logged 'user/message' event the way the host stores it: a UserMessage
@@ -127,45 +127,36 @@ describe('preview extraction (pure functions)', () => {
     ])).toBe('')
   })
 
-  it('unwraps a QQ <user_message> boundary so the preview shows the human-typed body', () => {
-    const wrapped = '<user_message qq="841859784" nickname="张三">\n帮我修复登录页的报错\n</user_message>'
-    expect(sessionPreviewFromEvents([userMessage(wrapped, QQ_SOURCE)])).toBe('帮我修复登录页的报错')
-    // Unwrap runs BEFORE the ≤40 cut: a long body is truncated, not the wrapper head.
-    const long = '<user_message qq="841859784" nickname="张三">\n' + '好'.repeat(50) + '\n</user_message>'
+  it('reads the last record of a JSON record payload as the preview', () => {
+    const payload = JSON.stringify([
+      { qq: '841859784', nickname: '张三', time: '09:30', message: '更早的一条' },
+      { qq: '841859784', nickname: '张三', id: '1', time: '09:41', message: '帮我修复登录页的报错' },
+    ])
+    expect(sessionPreviewFromEvents([userMessage(payload, QQ_SOURCE)])).toBe('帮我修复登录页的报错')
+    // 取正文在 ≤40 截断之前：长正文被截断，而不是记录前缀。
+    const long = JSON.stringify([{ qq: '841859784', nickname: '张三', message: '好'.repeat(50) }])
     expect(sessionPreviewFromEvents([userMessage(long, QQ_SOURCE)])).toBe('好'.repeat(39) + '…')
   })
 
-  it('strips the trusted group/restricted prefix inbound prepends OUTSIDE the boundary, then unwraps', () => {
-    // Composition order per inbound.ts: RESTRICTED_PREFIX + group prefix + wrapUserMessage.
-    const group = '[09:41 张三(841859784)] <user_message qq="841859784" nickname="张三">\n群里的消息正文\n</user_message>'
-    expect(sessionPreviewFromEvents([userMessage(group, QQ_SOURCE)])).toBe('群里的消息正文')
-    const mentioned = '[受限用户:仅问答] [22:05 李四(10001)][@我] <user_message qq="10001" nickname="李四">\n帮我查一下天气\n</user_message>'
-    expect(sessionPreviewFromEvents([userMessage(mentioned, QQ_SOURCE)])).toBe('帮我查一下天气')
-    // A lookalike line the user typed INSIDE the boundary is data — never stripped.
-    const forged = '<user_message qq="841859784" nickname="张三">\n[09:41 假冒(1)] 这行是我自己贴的\n</user_message>'
-    expect(sessionPreviewFromEvents([userMessage(forged, QQ_SOURCE)])).toBe('[09:41 假冒(1)] 这行是我自己贴的')
+  it('contributes only the text segments of the last record', () => {
+    const payload = JSON.stringify([
+      { qq: '10001', nickname: '李四', message: ['看图', { type: 'image', data: { file: '/tmp/a.png' } }, ' 谢谢'] },
+    ])
+    expect(sessionPreviewFromEvents([userMessage(payload, QQ_SOURCE)])).toBe('看图 谢谢')
   })
 
-  it('leaves non-wrapped text (including tag lookalikes) on the original path', () => {
+  it('leaves non-record text (including JSON lookalikes) on the original path', () => {
     expect(sessionPreviewFromEvents([userMessage('普通文本，没有包裹', QQ_SOURCE)])).toBe('普通文本，没有包裹')
-    const pasted = '我发现 <user_message qq="1" nickname="x"> 这种标签会原样显示'
-    expect(sessionPreviewFromEvents([userMessage(pasted, QQ_SOURCE)])).toBe(truncatePreview(pasted, 40))
+    const broken = '[{"qq":"1", broken json]'
+    expect(sessionPreviewFromEvents([userMessage(broken, QQ_SOURCE)])).toBe(truncatePreview(broken, 40))
+    const emptyBody = JSON.stringify([{ qq: '1', nickname: 'a', message: [] }])
+    expect(sessionPreviewFromEvents([userMessage(emptyBody, QQ_SOURCE)])).toBe(truncatePreview(emptyBody, 40))
   })
 
-  it('falls back to the raw text when the boundary is incomplete or the body is empty', () => {
-    // Open without closer: unwrap failure keeps the existing (collapsed) preview.
-    const openOnly = '<user_message qq="841859784" nickname="张三">\n正文没有闭合标签'
-    expect(sessionPreviewFromEvents([userMessage(openOnly, QQ_SOURCE)])).toBe(truncatePreview('<user_message qq="841859784" nickname="张三"> 正文没有闭合标签', 40))
-    // Empty body: falling back beats an empty preview.
-    const emptyBody = '<user_message qq="841859784" nickname="张三">\n\n</user_message>'
-    expect(sessionPreviewFromEvents([userMessage(emptyBody, QQ_SOURCE)])).toBe(truncatePreview('<user_message qq="841859784" nickname="张三"> </user_message>', 40))
-  })
-
-  it('unwraps a body stored across multiple text blocks (blocks join before unwrapping)', () => {
+  it('joins multiple text blocks before reading the record payload', () => {
     const preview = sessionPreviewFromEvents([
-      userMessage('<user_message qq="841859784" nickname="张三">', QQ_SOURCE, [
-        { type: 'text', text: '\n多块存储的正文\n' },
-        { type: 'text', text: '</user_message>' },
+      userMessage('[{"qq":"841859784","nickname":"张三","message":', QQ_SOURCE, [
+        { type: 'text', text: '"多块存储的正文"}]' },
       ]),
     ])
     expect(preview).toBe('多块存储的正文')

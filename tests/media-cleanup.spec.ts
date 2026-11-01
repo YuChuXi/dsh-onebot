@@ -13,8 +13,8 @@ import { mkdir, readFile, readdir, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
-import { extForInboundName, MediaStore } from '../src/media.js'
-import { Transcriber } from '../src/stt.js'
+import { extForInboundName, MediaStore } from '../src/media/store.js'
+import { Transcriber } from '../src/media/stt.js'
 
 /** Spawn a command and wait for exit; rejects on spawn error or non-zero code. */
 function runCommand(program: string, args: string[]): Promise<void> {

@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { describeError, errorStack } from '../src/errors.js'
+import { describeError, errorStack } from '../src/shared/errors.js'
 
 describe('describeError', () => {
   it('extracts the message from an Error', () => {

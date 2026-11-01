@@ -62,7 +62,9 @@ describe('plugin entry', () => {
     expect(config.mode).toBe('reverse')
     expect(config.port).toBe(8643)
     expect(config.requireMention).toBe(true)
-    expect(config.unknownCommand).toBe('intercept')
+    expect(config.outboundIntervalBaseMs).toBe(300)
+    expect(config.outboundIntervalPerCharMs).toBe(60)
+    expect(config.outboundIntervalJitterPct).toBe(30)
     expect(config.sttModel).toBe('small')
   })
 
@@ -75,7 +77,6 @@ describe('plugin entry', () => {
       accessToken: 'test-token',
       botQQ: '10002',
       sttEnabled: false,
-      sensitivePatterns: [],
     })
     // apply() registers its lifecycle via ctx.effect; capture the disposer.
     const effectSpy = vi.spyOn(ctx as { effect: (cb: () => unknown, label?: string) => unknown }, 'effect')
@@ -99,7 +100,7 @@ describe('plugin entry', () => {
     try {
       // Unset (schema default ''): exactly one mount-time warn naming the cwd.
       const unset = makeCtx()
-      apply(unset.ctx as never, Config({ mediaDir, port: 0, accessToken: 'test-token', botQQ: '10002', sttEnabled: false, sensitivePatterns: [] }))
+      apply(unset.ctx as never, Config({ mediaDir, port: 0, accessToken: 'test-token', botQQ: '10002', sttEnabled: false }))
       expect(warn).toHaveBeenCalledTimes(1)
       const line = String(warn.mock.calls[0]?.[0])
       expect(line).toContain('未配置 workspacePath')
@@ -108,7 +109,7 @@ describe('plugin entry', () => {
       // Configured: no warn.
       warn.mockClear()
       const set = makeCtx()
-      apply(set.ctx as never, Config({ mediaDir, port: 0, accessToken: 'test-token', botQQ: '10002', sttEnabled: false, sensitivePatterns: [], workspacePath: mediaDir }))
+      apply(set.ctx as never, Config({ mediaDir, port: 0, accessToken: 'test-token', botQQ: '10002', sttEnabled: false, workspacePath: mediaDir }))
       expect(warn).not.toHaveBeenCalled()
     } finally {
       warn.mockRestore()

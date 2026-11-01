@@ -5,16 +5,15 @@
  * window.__ModuleLoader__）的模块级契约：
  *   ① 语法可解析（new Function）+ CJS banner/footer 形态 + externals 仅 react；
  *   ② 入口导出 inject + apply；
- *   ③ 四组 29 键：分组/键集/默认值与宿主侧 src/settings-remote.js（T3 + W6 扩展
- *      + W7 workspacePath + T2 newMessagePolicy + T9 autoSteerPolicy）导出常量逐字一致（descriptor 契约核对，防两侧漂移）；
- *      诊断组 6 键文案为中文标签 + 一句话「关掉会怎样」+ 配置键名（W6）；
+ *   ③ 四组 33 键：分组/键集/默认值与宿主侧 src/settings-remote.ts 导出常量逐字一致（descriptor 契约核对，防两侧漂移）；
+ *      诊断组 5 键文案为中文标签 + 一句话「关掉会怎样」+ 配置键名（W6）；
  *   ④ Typert descriptor 与 T3 服务方法面逐字对齐：getSettings() /
  *      updateSettings(patch, expectedRevision) / listWorkspaces()（W7），全
  *      positional，namespace onebotSettings，result codec 可解析 host 形态快照
  *      （含脱敏 accessToken）与 workspace 列表；
- *   ⑤ 渲染函数模块级可测：renderGroup 纯函数产出三组 19 键控件，accessToken
+ *   ⑤ 渲染函数模块级可测：renderGroup 纯函数产出四组 33 键控件，accessToken
  *      密码型输入且不明文回显（脱敏约定：host 快照 accessToken 恒 ''）；
- *   ⑥ 保存语义：computePatch 产出 19 键子集 patch；secretDraft '' = 不修改、
+ *   ⑥ 保存语义：computePatch 产出 33 键子集 patch；secretDraft '' = 不修改、
  *      clearSecret = accessToken ''（清空）；数字非法键不进 patch。
  *
  * 契约唯一来源：docs/settings-page-design.md（T1 定案）§3/§3.1/§4/§5。
@@ -133,7 +132,7 @@ describe('T4 客户端 bundle — descriptor 契约核对（与 T3 src/settings-
     expect(listWorkspaces.result.schema.parse({ available: false, workspaces: [] })).toEqual({ available: false, workspaces: [] })
   })
 
-  it('result codec 可解析宿主形态快照（T1 §3：19 键 config + secrets 脱敏标记 + groups + effect=restart）', () => {
+  it('result codec 可解析宿主形态快照（T1 §3：33 键 config + secrets 脱敏标记 + groups + effect=restart）', () => {
     const getSettings = descriptors[0] as { result: { schema: { parse(value: unknown): unknown } } }
     const config: Record<string, unknown> = { ...SCHEMA_DEFAULTS }
     config.accessToken = '' // 宿主 buildSnapshot 脱敏约定：快照 accessToken 恒 ''
@@ -147,7 +146,7 @@ describe('T4 客户端 bundle — descriptor 契约核对（与 T3 src/settings-
     }
     const parsed = getSettings.result.schema.parse(snapshot) as typeof snapshot
     expect(parsed.config.accessToken).toBe('')
-    expect(parsed.config.workspacePath).toBe('') // W7：26 键含 workspacePath，默认 ''
+    expect(parsed.config.workspacePath).toBe('') // 含 workspacePath，默认 ''
     expect(parsed.effect).toBe(REMOTE_EFFECT)
   })
 
@@ -159,22 +158,22 @@ describe('T4 客户端 bundle — descriptor 契约核对（与 T3 src/settings-
     expect(() => getSettings.result.schema.parse({ revision: 0, entryActive: true, config: SCHEMA_DEFAULTS, secrets: [], groups: SETTINGS_GROUPS, effect: 'none' })).toThrow()
   })
 
-  it('updateSettings patch codec 接受 29 键任意子集、拒绝非法枚举值', () => {
+  it('updateSettings patch codec 接受 33 键任意子集、拒绝非法枚举值', () => {
     const updateSettings = descriptors[1] as { parameters: Array<{ codec: { schema: { parse(value: unknown): unknown } } }> }
     const patchCodec = updateSettings.parameters[0].codec.schema
     expect(patchCodec.parse({ port: 1234 })).toEqual({ port: 1234 })
-    expect(patchCodec.parse({ adminUsers: ['10000'], unknownCommand: 'passthrough' })).toEqual({ adminUsers: ['10000'], unknownCommand: 'passthrough' })
+    expect(patchCodec.parse({ adminUsers: ['10000'], recordInbound: true })).toEqual({ adminUsers: ['10000'], recordInbound: true })
     expect(patchCodec.parse({ workspacePath: '/tmp/ws' })).toEqual({ workspacePath: '/tmp/ws' }) // W7：字符串通道
     expect(() => patchCodec.parse({ mode: 'invalid' })).toThrow()
   })
 })
 
-describe('T4 客户端 bundle — 四组 29 键（分组/键集/默认值 = T1 §4 表 + W6 诊断组 + W7 workspacePath + T2 newMessagePolicy + T9 autoSteerPolicy + T3 deferredTimeoutMs = T3 常量）', () => {
+describe('T4 客户端 bundle — 四组 33 键（分组/键集/默认值 = T1 §4 表 + W6 诊断组 + W7 workspacePath + 插话四开关 + 出站节流三键 = T3 常量）', () => {
   it('分组与键序逐字对齐 host SETTINGS_GROUPS', () => {
     expect(client.GROUP_KEYS).toEqual(SETTINGS_GROUPS)
     expect(groups.map((group) => group.id)).toEqual(['connection', 'permissions', 'behavior', 'diagnostics'])
     expect(allFields.map((field) => field.key).sort()).toEqual([...ALL_KEYS].sort())
-    expect(allFields).toHaveLength(29) // T2 26→27（newMessagePolicy）、T9 27→28（autoSteerPolicy）、T3 28→29（deferredTimeoutMs）
+    expect(allFields).toHaveLength(33)
   })
 
   it('默认值逐字对齐 host SCHEMA_DEFAULTS（重置按钮唯一来源）', () => {
@@ -189,6 +188,7 @@ describe('T4 客户端 bundle — 四组 29 键（分组/键集/默认值 = T1 �
       else if (field.type === 'number') expect(typeof fallback).toBe('number')
       else if (field.type === 'enum') expect(field.options ?? []).toContain(fallback)
       else if (field.type === 'stringArray') expect(Array.isArray(fallback)).toBe(true)
+      else if (field.type === 'text') expect(typeof fallback).toBe('string')
       else expect(field.type === 'string' || field.type === 'secret').toBe(true)
     }
     // 枚举键集与宿主 validatePatch 接受的枚举值一致（T1 §4 表）
@@ -196,9 +196,12 @@ describe('T4 客户端 bundle — 四组 29 键（分组/键集/默认值 = T1 �
     expect(enumField('mode')?.options).toEqual(['reverse', 'forward'])
     expect(enumField('dmPolicy')?.options).toEqual(['open', 'allowlist', 'disabled'])
     expect(enumField('groupPolicy')?.options).toEqual(['open', 'allowlist', 'disabled'])
-    expect(enumField('unknownCommand')?.options).toEqual(['intercept', 'passthrough'])
-    expect(enumField('newMessagePolicy')?.options).toEqual(['queue', 'steer'])
-    expect(enumField('autoSteerPolicy')?.options).toEqual(['admin', 'all']) // T9：枚举与宿主 ENUM_KEYS 同宽
+    expect(enumField('sleepMode')?.options).toEqual(['window', 'peak'])
+    // 插话四开关以布尔控件呈现（不再是枚举下拉）
+    for (const key of ['steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'steerNotice']) {
+      expect(enumField(key)?.options).toBeUndefined()
+      expect(groups.flatMap((group) => group.fields).find((field) => field.key === key)?.type).toBe('boolean')
+    }
   })
 
   it('分组标题与字段 label 为中文（T4 要求）', () => {
@@ -226,24 +229,24 @@ describe('T4 客户端 bundle — 渲染函数模块级可测（renderGroup 纯�
     }))
   }
 
-  it('四组各产出标题与逐字段控件行（28 行 obx-field）', () => {
+  it('四组各产出标题与逐字段控件行（33 行 obx-field）', () => {
     const sections = renderAll(draft({ config: SCHEMA_DEFAULTS }))
     expect(sections.map((section) => (section.props as Record<string, unknown>)['data-group'])).toEqual(['connection', 'permissions', 'behavior', 'diagnostics'])
     const titles = sections.map((section) => ((section.children[0] as StubElement).children[0] as string))
     expect(titles).toEqual(['连接', '权限', '行为', '诊断'])
     const fieldRows = sections.flatMap((section) => walk(section).filter((element) => element.type === 'div' && element.props.className === 'obx-field'))
-    expect(fieldRows).toHaveLength(29)
+    expect(fieldRows).toHaveLength(33)
   })
 
-  it('控件类型齐备：4 枚举下拉 + 3 多行文本 + 11 布尔勾选 + 5 文本框 + 1 密码框（secret 另含清除勾选）', () => {
+  it('控件类型齐备：4 枚举下拉 + 5 多行文本 + 13 布尔勾选 + 11 文本框 + 1 密码框（secret 另含清除勾选）', () => {
     const elements = renderAll(draft({ config: SCHEMA_DEFAULTS })).flatMap((section) => walk(section))
     const inputs = elements.filter((element) => element.type === 'input') as Array<StubElement & { props: Record<string, unknown> }>
     const selects = elements.filter((element) => element.type === 'select')
     const textareas = elements.filter((element) => element.type === 'textarea')
-    expect(selects).toHaveLength(6) // 5 原有枚举（mode/dmPolicy/groupPolicy/unknownCommand/newMessagePolicy）+ T9 autoSteerPolicy
-    expect(textareas).toHaveLength(3)
-    expect(inputs.filter((input) => input.props.type === 'checkbox')).toHaveLength(11 + 1) // 11 布尔（5 原有 + 6 W6）+ secret 清除勾选
-    expect(inputs.filter((input) => input.props.type === 'text')).toHaveLength(8) // host/port/url/botQQ/workspacePath（W7）+ interimRecallMs/rateLimitPerMinute + T3 deferredTimeoutMs（number 以文本框渲染）
+    expect(selects).toHaveLength(4) // mode/dmPolicy/groupPolicy/sleepMode
+    expect(textareas).toHaveLength(5)
+    expect(inputs.filter((input) => input.props.type === 'checkbox')).toHaveLength(12 + 1) // 12 布尔（requireMention/allowAllUsers/sendErrorNotice + 4 插话开关 + 5 诊断）+ secret 清除勾选
+    expect(inputs.filter((input) => input.props.type === 'text')).toHaveLength(11) // host/url/botQQ/workspacePath/sleepStart/sleepEnd + port/三档出站间隔/recentMessages（number 以文本框渲染）
     expect(inputs.filter((input) => input.props.type === 'password')).toHaveLength(1)
   })
 
@@ -276,7 +279,7 @@ describe('T4 客户端 bundle — 保存语义（updateSettings(patch, expectedR
     opts?: { secretDraft?: string; clearSecret?: boolean },
   ) => { patch: Record<string, unknown>; invalidKeys: string[] }
 
-  it('仅下发与生效值有差异的键（29 键任意子集）', () => {
+  it('仅下发与生效值有差异的键（33 键任意子集）', () => {
     const values = draft({ config: SCHEMA_DEFAULTS })
     values.port = '9999'
     values.mode = 'forward'
@@ -301,12 +304,12 @@ describe('T4 客户端 bundle — 保存语义（updateSettings(patch, expectedR
 
   it('数字字段非法输入不进 patch 且单独报告（host validatePatch 二次校验兜底）', () => {
     const values = draft({ config: SCHEMA_DEFAULTS })
-    values.interimRecallMs = 'abc'
-    values.rateLimitPerMinute = '45'
+    values.outboundIntervalBaseMs = 'abc'
+    values.recentMessages = '45'
     const { patch, invalidKeys } = compute(values, SCHEMA_DEFAULTS)
-    expect(invalidKeys).toEqual(['interimRecallMs'])
-    expect(patch).toEqual({ rateLimitPerMinute: 45 })
-    expect(patch.interimRecallMs).toBeUndefined()
+    expect(invalidKeys).toEqual(['outboundIntervalBaseMs'])
+    expect(patch).toEqual({ recentMessages: 45 })
+    expect(patch.outboundIntervalBaseMs).toBeUndefined()
   })
 
   it('stringArray 文本按行解析：trim、去空行，与宿主字符串数组契约一致', () => {
@@ -317,9 +320,9 @@ describe('T4 客户端 bundle — 保存语义（updateSettings(patch, expectedR
   })
 })
 
-describe('W6 诊断组 — 6 个观测/调试布尔键的文案契约（中文标签 + 关掉会怎样 + 配置键名）', () => {
+describe('W6 诊断组 — 5 个观测/调试布尔键的文案契约（中文标签 + 关掉会怎样 + 配置键名）', () => {
   const diagnosticsGroup = groups.find((group) => group.id === 'diagnostics')!
-  const NEW_KEYS = ['actionAuditEnabled', 'traceEnabled', 'recordInbound', 'inboxRedact', 'injectEnabled', 'injectDryRun']
+  const NEW_KEYS = ['traceEnabled', 'recordInbound', 'inboxRedact', 'injectEnabled', 'injectDryRun']
 
   it('诊断组键集与键序逐字对齐 host SETTINGS_GROUPS.diagnostics', () => {
     expect(diagnosticsGroup.fields.map((field) => field.key)).toEqual(NEW_KEYS)
@@ -335,7 +338,6 @@ describe('W6 诊断组 — 6 个观测/调试布尔键的文案契约（中文�
       expect(field.hint!.length).toBeGreaterThan(20) // 一句话「关掉会怎样」而非空占位
     }
     expect(diagnosticsGroup.fields.map((field) => field.label)).toEqual([
-      '主动写审计',
       '决策追踪（trace）',
       '入站事件录制',
       '录制脱敏',
@@ -344,17 +346,16 @@ describe('W6 诊断组 — 6 个观测/调试布尔键的文案契约（中文�
     ])
   })
 
-  it('诊断组默认值与 host SCHEMA_DEFAULTS 一致（actionAuditEnabled/injectDryRun 开，其余关）', () => {
+  it('诊断组默认值与 host SCHEMA_DEFAULTS 一致（injectDryRun 开，其余关）', () => {
     const defaults = client.DEFAULTS as Record<string, unknown>
-    expect(defaults.actionAuditEnabled).toBe(true)
     expect(defaults.injectDryRun).toBe(true)
     for (const key of ['traceEnabled', 'recordInbound', 'inboxRedact', 'injectEnabled']) {
       expect(defaults[key]).toBe(false)
     }
-    expect(client.DEFAULTS).toEqual(SCHEMA_DEFAULTS) // 整表逐字一致（含 6 新键）
+    expect(client.DEFAULTS).toEqual(SCHEMA_DEFAULTS) // 整表逐字一致（含 5 个诊断键）
   })
 
-  it('诊断组渲染为 6 个布尔勾选行；patchCodec 接受 6 新键、拒绝非布尔', () => {
+  it('诊断组渲染为 5 个布尔勾选行；patchCodec 接受 5 新键、拒绝非布尔', () => {
     const values = draft({ config: SCHEMA_DEFAULTS }) as Record<string, unknown>
     values.traceEnabled = true
     values.injectEnabled = true
@@ -362,7 +363,7 @@ describe('W6 诊断组 — 6 个观测/调试布尔键的文案契约（中文�
     expect(compute(values, SCHEMA_DEFAULTS).patch).toEqual({ traceEnabled: true, injectEnabled: true })
     const updateSettings = descriptors[1] as { parameters: Array<{ codec: { schema: { parse(value: unknown): unknown } } }> }
     const patchCodec = updateSettings.parameters[0].codec.schema
-    expect(patchCodec.parse({ actionAuditEnabled: false, injectDryRun: false })).toEqual({ actionAuditEnabled: false, injectDryRun: false })
+    expect(patchCodec.parse({ recordInbound: false, injectDryRun: false })).toEqual({ recordInbound: false, injectDryRun: false })
     expect(() => patchCodec.parse({ traceEnabled: 'yes' })).toThrow()
   })
 })
@@ -400,7 +401,7 @@ describe('W6 「非默认」徽标 — 快照生效值 vs schema 默认值（纯
       return allFields.filter((field) => !valueEquals(config[field.key], defaults[field.key])).map((field) => field.key)
     }
     expect(panelKeys(snapshot.config as Record<string, unknown>)).toEqual([])
-    expect(panelKeys({ ...SCHEMA_DEFAULTS, traceEnabled: true, rateLimitPerMinute: 60 })).toEqual(['rateLimitPerMinute', 'traceEnabled'])
+    expect(panelKeys({ ...SCHEMA_DEFAULTS, traceEnabled: true, outboundIntervalBaseMs: 60 })).toEqual(['outboundIntervalBaseMs', 'traceEnabled'])
   })
 })
 
@@ -427,13 +428,13 @@ describe('W6 失败守卫（客户端侧）— host edit-failed 中文错误可�
     expect(isConflictError({ code: 'onebot-settings/conflict', message: 'expectedRevision mismatch' })).toBe(true)
   })
 
-  it('host patch 白名单 29 键与 client patchSchema 同宽：新键可下发（契约同步核对）', () => {
+  it('host patch 白名单 33 键与 client patchSchema 同宽：新键可下发（契约同步核对）', () => {
     const updateSettings = descriptors[1] as { parameters: Array<{ codec: { schema: { parse(value: unknown): unknown } } }> }
     const patch = updateSettings.parameters[0].codec.schema.parse({
-      actionAuditEnabled: true, traceEnabled: false, recordInbound: true, inboxRedact: false, injectEnabled: false, injectDryRun: true,
+      traceEnabled: false, recordInbound: true, inboxRedact: false, injectEnabled: false, injectDryRun: true,
     })
     expect(patch).toEqual({
-      actionAuditEnabled: true, traceEnabled: false, recordInbound: true, inboxRedact: false, injectEnabled: false, injectDryRun: true,
+      traceEnabled: false, recordInbound: true, inboxRedact: false, injectEnabled: false, injectDryRun: true,
     })
   })
 })
@@ -582,7 +583,7 @@ describe('T5 批 2 — 交互派生纯函数（computeDirtyKeys / deriveModeInac
     expect(computeDirtyKeys(values, SCHEMA_DEFAULTS, { secretDraft: 'tok', clearSecret: false })).toEqual(['port', 'accessToken'])
     expect(computeDirtyKeys(values, SCHEMA_DEFAULTS, { secretDraft: '', clearSecret: true })).toEqual(['port', 'accessToken'])
     // 数字非法键不进 patch → 不入 dirtyKeys（badNumber 反馈仍走 save() 通道）
-    values.interimRecallMs = 'abc'
+    values.outboundIntervalBaseMs = 'abc'
     expect(computeDirtyKeys(values, SCHEMA_DEFAULTS)).toEqual(['port'])
   })
 
@@ -614,12 +615,12 @@ describe('T5 批 2 — 诊断组 details/summary 折叠渲染（UX §3.1：colla
   it('缺省（无 collapsible）保持 section>h3 既有形态；组描述行渲染在标题后', () => {
     const section = renderWith({})
     expect(section.type).toBe('section')
-    expect(walk(section).filter((element) => element.props.className === 'obx-field')).toHaveLength(6)
+    expect(walk(section).filter((element) => element.props.className === 'obx-field')).toHaveLength(5)
     expect(JSON.stringify(section)).toContain('观测与调试开关')
   })
 
   it('collapsible 时 details>summary（aria-expanded/controls、open 受控）+ summary meta + 脏标记，字段行不减少', () => {
-    const collapsed = renderWith({ collapsible: { open: false, summaryMeta: '6 项 · 2 项默认开' } })
+    const collapsed = renderWith({ collapsible: { open: false, summaryMeta: '5 项 · 1 项默认开' } })
     expect(collapsed.type).toBe('details')
     expect(collapsed.props['data-group']).toBe('diagnostics')
     expect(collapsed.props.open).toBe(false)
@@ -629,11 +630,11 @@ describe('T5 批 2 — 诊断组 details/summary 折叠渲染（UX §3.1：colla
     expect(summary.props['aria-expanded']).toBe(false)
     expect(String(summary.props['aria-controls'])).toContain('diagnostics')
     expect(JSON.stringify(summary)).toContain('诊断')
-    expect(JSON.stringify(summary)).toContain('6 项 · 2 项默认开')
+    expect(JSON.stringify(summary)).toContain('5 项 · 1 项默认开')
     expect(JSON.stringify(summary)).not.toContain('含未保存修改') // 无脏改动不打标记
-    expect(walk(collapsed).filter((element) => element.props.className === 'obx-field')).toHaveLength(6)
+    expect(walk(collapsed).filter((element) => element.props.className === 'obx-field')).toHaveLength(5)
     // 展开 + 含脏改动：aria-expanded 翻转 + 「● 含未保存修改」标记
-    const expanded = renderWith({ collapsible: { open: true, summaryMeta: '6 项 · 2 项默认开', dirtyMark: '● 含未保存修改' } })
+    const expanded = renderWith({ collapsible: { open: true, summaryMeta: '5 项 · 1 项默认开', dirtyMark: '● 含未保存修改' } })
     const summary2 = expanded.children[0] as StubElement
     expect(summary2.props['aria-expanded']).toBe(true)
     expect(JSON.stringify(summary2)).toContain('● 含未保存修改')
@@ -712,12 +713,12 @@ describe('T6 批 3 — 冲突合并保留 mergeOnConflict（UX §5.4：远端未
 
   it('远端已变但本地未编辑的键静默跟随（不打橙标）；stringArray 以换行 join 展示形态重写', () => {
     const before = draft({ config: SCHEMA_DEFAULTS })
-    before.rateLimitPerMinute = '60'
+    before.outboundIntervalBaseMs = '60'
     const merged = mergeOnConflict(before, SCHEMA_DEFAULTS, { ...SCHEMA_DEFAULTS, adminUsers: ['10086', '22222'] })
     expect(merged.conflictKeys).toEqual([])
     expect(merged.keptCount).toBe(1)
     expect(merged.draft.adminUsers).toBe('10086\n22222')
-    expect(merged.draft.rateLimitPerMinute).toBe('60')
+    expect(merged.draft.outboundIntervalBaseMs).toBe('60')
     // 本地也编辑的 stringArray → 冲突键（跟随远端新值）
     const before2 = draft({ config: SCHEMA_DEFAULTS })
     before2.adminUsers = '30000'
@@ -760,20 +761,21 @@ describe('T6 批 3 — 数字行内校验（UX §5.6：blur 触发、非法标�
   const numberInput = (section: StubElement) =>
     walk(section).find((element) => String(element.props.className).includes('obx-input--number'))!
 
-  it('NUMBER_RANGE 逐字对齐 host 常量（src/settings-remote.ts L129-134 字面量副本，不改 host）且覆盖全部数字键', () => {
+  it('NUMBER_RANGE 逐字对齐 host 常量（src/settings-remote.ts NUMBER_RANGE 字面量副本，不改 host）且覆盖全部数字键', () => {
     expect(NUMBER_RANGE).toStrictEqual({
       port: [1, 65535],
-      interimRecallMs: [0, undefined],
-      rateLimitPerMinute: [0, undefined],
-      deferredTimeoutMs: [0, undefined],
+      outboundIntervalBaseMs: [0, undefined],
+      outboundIntervalPerCharMs: [0, undefined],
+      outboundIntervalJitterPct: [0, 100],
+      recentMessages: [0, 100],
     })
     expect(Object.keys(NUMBER_RANGE)).toEqual(allFields.filter((field) => field.type === 'number').map((field) => field.key))
-    expect(CLIENT_SOURCE).toContain('src/settings-remote.ts L129-134') // 来源行号注明
+    expect(CLIENT_SOURCE).toContain('src/settings-remote.ts NUMBER_RANGE') // 来源常量注明
   })
 
   it('numberRangeInvalid 与 host validatePatch 同语义：越界/NaN 判非法返回范围文案，边界含端点；非 number 不校验', () => {
     const portField = allFields.find((field) => field.key === 'port')!
-    const recallField = allFields.find((field) => field.key === 'interimRecallMs')!
+    const recallField = allFields.find((field) => field.key === 'outboundIntervalBaseMs')!
     expect(numberRangeInvalid(portField, '70000')).toBe('1–65535')
     expect(numberRangeInvalid(portField, '0')).toBe('1–65535')
     expect(numberRangeInvalid(portField, '3000')).toBeNull()

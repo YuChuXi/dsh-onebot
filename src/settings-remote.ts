@@ -50,30 +50,29 @@ import type { Context } from '@deepseek-ai/cordis'
 
 /** 宿主 dsh-workspace 注册表（src/bridge.ts:152 已有结构面；本模块只读消费
  *  list()，不打开 registry 内部态——import type 零运行时依赖，不改 bridge.ts）。 */
-import type { WorkspaceRegistryLike } from './bridge.js'
+import type { WorkspaceRegistryLike } from './bridge/config.js'
 
 /** patch insert 中 dsh-onebot 主条目的 id（T1 §2/§3：唯一持久层条目）。 */
 export const ENTRY_ID = 'dsh-onebot'
 /** Typert Remote 命名空间 = cordis 服务键（T1 §4）。 */
 export const NAMESPACE = 'onebotSettings'
-/** 快照固定值：29 键均为插件级热重启生效（T1 §5；W1/W2 新增 6 布尔键同粒度）。 */
+/** 快照固定值：33 键均为插件级热重启生效（T1 §5）。 */
 export const REMOTE_EFFECT = 'restart'
 
-/** 设置页 UI 四组 29 键（T1 §4 + T9 autoSteerPolicy + T3 deferredTimeoutMs；与 src/index.ts Config schema 一一对应）。
- *  W6：permissions/behavior 三组 19 键保持不动，W1/W2 的 6 个布尔键独立成
- *  「diagnostics（诊断）」组——它们全部默认关（除 actionAuditEnabled 默认开）、
- *  属观测/调试面，与连接权限行为组的使用频率与风险等级都不同，独立分组让
- *  「默认全关的调试开关」一眼可辨（对齐竞品 v0.6.0 面板的开关分组话术）。
- *  W7：connection 组追加 workspacePath（会话默认工作区；schema 已有该键
- *  src/index.ts:287，本批次起入面板白名单，键序追加在组尾）。 */
+/** 设置页 UI 四组 33 键（与 src/index.ts Config schema 的 Config 面向面板的键一一对应）。
+ *  connection/permissions/behavior 三组是连接、权限与行为面；diagnostics（诊断）
+ *  组收纳观测/调试布尔键——它们默认关、属观测/调试面，与前三组的使用频率与
+ *  风险等级都不同，独立分组让「默认全关的调试开关」一眼可辨。
+ *  behavior 组的插话开关以布尔形式暴露（steerEnabled/steerAllMembers/
+ *  steerAllowRestricted/steerNotice）；附加提示词按私聊/群聊分列。 */
 export const SETTINGS_GROUPS: Readonly<Record<string, readonly string[]>> = {
   connection: ['mode', 'host', 'port', 'url', 'accessToken', 'botQQ', 'workspacePath'],
   permissions: ['requireMention', 'adminUsers', 'dmPolicy', 'groupPolicy', 'allowAllUsers', 'allowFrom', 'groupAllowFrom'],
-  behavior: ['interimMessages', 'interimRecall', 'interimRecallMs', 'sendErrorNotice', 'unknownCommand', 'rateLimitPerMinute', 'newMessagePolicy', 'autoSteerPolicy', 'deferredTimeoutMs'],
-  diagnostics: ['actionAuditEnabled', 'traceEnabled', 'recordInbound', 'inboxRedact', 'injectEnabled', 'injectDryRun'],
+  behavior: ['sendErrorNotice', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages', 'steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'steerNotice', 'sleepMode', 'sleepStart', 'sleepEnd', 'extraPromptPrivate', 'extraPromptGroup'],
+  diagnostics: ['traceEnabled', 'recordInbound', 'inboxRedact', 'injectEnabled', 'injectDryRun'],
 }
 
-/** schema 默认值（T1 §4 表；摘自 src/index.ts:171-245），快照生效值的底层。 */
+/** schema 默认值（摘自 src/index.ts 的 Config schema），快照生效值的底层。 */
 export const SCHEMA_DEFAULTS: Readonly<Record<string, unknown>> = {
   mode: 'reverse',
   host: '127.0.0.1',
@@ -90,20 +89,26 @@ export const SCHEMA_DEFAULTS: Readonly<Record<string, unknown>> = {
   allowAllUsers: false,
   allowFrom: [],
   groupAllowFrom: [],
-  interimMessages: true,
-  interimRecall: true,
-  interimRecallMs: 90_000,
   sendErrorNotice: true,
-  unknownCommand: 'intercept',
-  rateLimitPerMinute: 30,
-  // T2 (P1)：任务运行中的新消息处理策略（queue=排队默认；steer=插话）。
-  newMessagePolicy: 'queue',
-  // T9-B (用户裁决 2026-10-12)：自动插话资格档位（admin=仅管理员默认；all=不限）。
-  autoSteerPolicy: 'admin',
-  // T3 (P2)：等待模型回复超时阈值（毫秒；0=关闭超时补发）。
-  deferredTimeoutMs: 600_000,
-  // W6：W1/W2 可观测/调试布尔键（schema 默认值摘自 src/index.ts:297-317）。
-  actionAuditEnabled: true,
+  // 出站节流：基础间隔 + 每字追加 + 抖动百分比（与 src/index.ts schema 默认一致）。
+  outboundIntervalBaseMs: 300,
+  outboundIntervalPerCharMs: 60,
+  outboundIntervalJitterPct: 30,
+  // 注入上文窗口的记录总条数（含触发消息；0 = 只注入触发消息）。
+  recentMessages: 50,
+  // 休眠：每日时段（window）或高峰时段（peak），时段留空 = 不启用。
+  sleepMode: 'window',
+  sleepStart: '',
+  sleepEnd: '',
+  // 附加提示词：按私聊/群聊分列，留空不注入。
+  extraPromptPrivate: '',
+  extraPromptGroup: '',
+  // 插话四开关（面板复选框；默认排队，仅管理员可插话，受限成员放行，插话回执开）。
+  steerEnabled: false,
+  steerAllMembers: false,
+  steerAllowRestricted: true,
+  steerNotice: true,
+  // 可观测/调试布尔键（默认关）。
   traceEnabled: false,
   recordInbound: false,
   inboxRedact: false,
@@ -118,31 +123,28 @@ const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
   mode: ['reverse', 'forward'],
   dmPolicy: ['open', 'allowlist', 'disabled'],
   groupPolicy: ['open', 'allowlist', 'disabled'],
-  unknownCommand: ['intercept', 'passthrough'],
-  // T2 (P1)：queue=排队（默认）；steer=插话进运行中任务。
-  newMessagePolicy: ['queue', 'steer'],
-  // T9-B (用户裁决 2026-10-12)：admin=仅管理员（默认）；all=不限。
-  autoSteerPolicy: ['admin', 'all'],
+  sleepMode: ['window', 'peak'],
 }
-const NUMBER_KEYS: readonly string[] = ['port', 'interimRecallMs', 'rateLimitPerMinute', 'deferredTimeoutMs']
-/** 数字键取值范围（评审 B4：port 1–65535、时长/频控 ≥0；越界在 Remote 层拒绝，不再只依赖宿主回滚兜底）。 */
+const NUMBER_KEYS: readonly string[] = ['port', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages']
+/** 数字键取值范围（port 1–65535、间隔 ≥0；越界在 Remote 层拒绝）。 */
 const NUMBER_RANGE: Readonly<Record<string, readonly [number, number | undefined]>> = {
   port: [1, 65535],
-  interimRecallMs: [0, undefined],
-  rateLimitPerMinute: [0, undefined],
-  deferredTimeoutMs: [0, undefined],
+  outboundIntervalBaseMs: [0, undefined],
+  outboundIntervalPerCharMs: [0, undefined],
+  outboundIntervalJitterPct: [0, 100],
+  recentMessages: [0, 100],
 }
-/** 布尔键白名单（T1 §4 + W6 扩展：W1/W2 观测/调试 6 键入列；顺序与
- *  SETTINGS_GROUPS.diagnostics 一致。数值键 dedupWindowSeconds/actionRatePerMinute/
- *  actionRatePerDay/injectIntervalMs 与枚举键 traceLevel 本期不入 UI 白名单——
- *  面板仅布尔开关与既有 19 键，调优键仍走 patch config 手改，取舍见 DEVLOG W6）。 */
+/** 布尔键白名单（顺序对齐 SETTINGS_GROUPS 中 behavior 与 diagnostics 的键序）。
+ *  调优数值键（dedupWindowSeconds、injectIntervalMs）与枚举键 traceLevel 不入
+ *  UI 白名单，仍走 patch config 手改。 */
 const BOOLEAN_KEYS: readonly string[] = [
-  'requireMention', 'allowAllUsers', 'interimMessages', 'interimRecall', 'sendErrorNotice',
-  'actionAuditEnabled', 'traceEnabled', 'recordInbound', 'inboxRedact', 'injectEnabled', 'injectDryRun',
+  'requireMention', 'allowAllUsers', 'sendErrorNotice',
+  'steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'steerNotice',
+  'traceEnabled', 'recordInbound', 'inboxRedact', 'injectEnabled', 'injectDryRun',
 ]
-const STRING_KEYS: readonly string[] = ['host', 'url', 'accessToken', 'botQQ', 'workspacePath']
+const STRING_KEYS: readonly string[] = ['host', 'url', 'accessToken', 'botQQ', 'workspacePath', 'sleepStart', 'sleepEnd', 'extraPromptPrivate', 'extraPromptGroup']
 const STRING_ARRAY_KEYS: readonly string[] = ['adminUsers', 'allowFrom', 'groupAllowFrom']
-/** 全部 29 键（校验与快照的唯一键集；6 枚举 + 4 数字 + 11 布尔 + 5 字符串 + 3 字符串数组）。 */
+/** 全部 33 键（校验与快照的唯一键集；4 枚举 + 5 数字 + 12 布尔 + 9 字符串 + 3 字符串数组）。 */
 export const ALL_KEYS: readonly string[] = [
   ...Object.keys(ENUM_KEYS), ...NUMBER_KEYS, ...BOOLEAN_KEYS, ...STRING_KEYS, ...STRING_ARRAY_KEYS,
 ]
@@ -153,7 +155,7 @@ export interface OnebotSettingsSnapshot {
   revision: number
   /** dsh-onebot 条目 fiber 是否 active（fiber.state === 2，同 configEditor.edit 的活性判据）。 */
   entryActive: boolean
-  /** 28 键生效值；accessToken 脱敏为 ''。 */
+  /** 33 键生效值；accessToken 脱敏为 ''。 */
   config: Record<string, unknown>
   /** 脱敏键标记：明文是否已配置。 */
   secrets: Array<{ path: string[]; set: boolean }>
@@ -303,7 +305,7 @@ function resolveWorkspaceRegistry(ctx: { get(key: string): unknown } | undefined
   return registry !== undefined && registry !== null && typeof registry.list === 'function' ? registry : undefined
 }
 
-/** 28 键生效值 = schema 默认值 ← 条目 config 覆盖（T1 §3 合并优先级一句话）。 */
+/** 33 键生效值 = schema 默认值 ← 条目 config 覆盖（T1 §3 合并优先级一句话）。 */
 export function effectiveConfig(raw: Record<string, unknown>): Record<string, unknown> {
   const effective: Record<string, unknown> = {}
   for (const key of ALL_KEYS) {
@@ -332,7 +334,7 @@ function buildSnapshot(entry: ConfigEditorEntry, state: RevisionState): OnebotSe
   }
 }
 
-/** updateSettings 入参校验（T1 §4：28 键的任意子集，扁平 JSON）。未知键整单
+/** updateSettings 入参校验（T1 §4：33 键的任意子集，扁平 JSON）。未知键整单
  *  拒绝（不静默丢弃）；类型/枚举不符拒绝；具体取值合法性交由宿主 schemastery
  *  校验 + reconcile 失败自动回滚兜底（T1 §5）。 */
 export function validatePatch(patch: unknown): Record<string, unknown> {
@@ -409,11 +411,10 @@ export function describeEditFailure(cause: unknown): string {
  * 除覆盖行，dsh-config-editor/lib/index.js:93-104）→ 成功后返回新快照（指纹
  * 变化 → revision +1）。
  *
- * W6：edit 失败不再裸抛宿主原生 Error（此前锁超时/激活回滚等错误绕开
- * onebot-settings/* 错误码体系直达网关，面板拿到的是英文技术文案）——按
- * describeEditFailure 归一为 onebot-settings/edit-failed 中文错误并保留 cause；
- * 失败路径 revision 不递增（指纹观察只在成功后的 buildSnapshot 发生）、不重试、
- * 不补偿写，patch 文件由宿主保证未被破坏（config-editor.md §3 矩阵）。 */
+ * edit 失败按 describeEditFailure 归一为 onebot-settings/edit-failed 中文错误
+ * 并保留 cause，宿主原生错误文案不下发网关；失败路径 revision 不递增（指纹
+ * 观察只在成功后的 buildSnapshot 发生）、不重试、不补偿写，patch 文件由宿主
+ * 保证未被破坏（config-editor.md §3 矩阵）。 */
 export async function updateSettings(
   editor: ConfigEditorLike,
   state: RevisionState,

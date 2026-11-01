@@ -13,8 +13,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 
-import { ChatBridge } from '../src/bridge.js'
-import { registerTools } from '../src/tools.js'
+import { ChatBridge } from '../src/bridge/index.js'
+import { registerTools } from '../src/tools/index.js'
 
 interface SendTool {
   name: string
@@ -50,10 +50,9 @@ async function makeHarness() {
     defaultModel: undefined,
     config: {
       botQQ: '10002', ignoreSelf: false, requireMention: true,
-      interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-      sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+      sendErrorNotice: true, restrictedMemberPrefix: false,
+      mediaDir, maxImageBytes: 8 * 1024 * 1024,
       maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-      textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
       agentPreset: 'standard', workspacePath: workspace, maxInboundFileBytes: 0,
     },
     policy: {

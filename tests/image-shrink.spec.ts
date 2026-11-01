@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCanvas, loadImage } from '@napi-rs/canvas'
-import { MAX_DECODE_EDGE, shrinkImage } from '../src/image-shrink.js'
+import { MAX_DECODE_EDGE, shrinkImage } from '../src/media/shrink.js'
 
 // File-level partial mock: forward the real @napi-rs/canvas, but wrap
 // `loadImage` in a spy so decode-bomb tests can assert it was never called.

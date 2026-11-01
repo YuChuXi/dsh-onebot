@@ -32,7 +32,7 @@ import {
   listWorkspaces,
   updateSettings,
 } from '../src/settings-remote.js'
-import type { WorkspaceRegistryLike } from '../src/bridge.js'
+import type { WorkspaceRegistryLike } from '../src/bridge/index.js'
 
 /** configEditor 最小替身：rows = profile patch 中 dsh-onebot 的覆盖行文档。 */
 class FakeConfigEditor {
@@ -108,7 +108,7 @@ describe('onebotSettings remote — 三步主链路（写设置 → revision 递
     expect(Object.keys(snapshot.config).sort()).toEqual([...ALL_KEYS].sort())
     expect(snapshot.config.requireMention).toBe(SCHEMA_DEFAULTS.requireMention)
     expect(snapshot.config.port).toBe(SCHEMA_DEFAULTS.port)
-    expect(snapshot.config.interimRecallMs).toBe(SCHEMA_DEFAULTS.interimRecallMs)
+    expect(snapshot.config.outboundIntervalBaseMs).toBe(SCHEMA_DEFAULTS.outboundIntervalBaseMs)
     expect(snapshot.config.accessToken).toBe('') // 未配置：脱敏位空
     expect(snapshot.secrets).toEqual([{ path: ['accessToken'], set: false }])
     expect(snapshot.groups).toEqual(SETTINGS_GROUPS)
@@ -195,7 +195,7 @@ describe('onebotSettings remote — revision/no-op/失败路径（T1 §3.1 #4 #5
     const state = createRevisionState()
     expect(getSettings(editor, state).revision).toBe(0)
     // 模拟 HMR 应用了外部手改（不经本 Remote）。
-    editor.entry.options.config = { ...editor.entry.options.config, interimRecallMs: 60_000 }
+    editor.entry.options.config = { ...editor.entry.options.config, outboundIntervalBaseMs: 500 }
     expect(getSettings(editor, state).revision).toBe(1)
   })
 })
@@ -274,11 +274,10 @@ describe('onebotSettings remote — descriptor 契约（T1 §4：全 positional�
   })
 })
 
-describe('onebotSettings remote — W6 白名单扩展（W1/W2 观测/调试 6 键）', () => {
-  const NEW_BOOLEAN_KEYS = ['actionAuditEnabled', 'traceEnabled', 'recordInbound', 'inboxRedact', 'injectEnabled', 'injectDryRun'] as const
-  /** 期望默认值（摘自 src/index.ts schema：actionAuditEnabled/injectDryRun 默认开，其余默认关）。 */
+describe('onebotSettings remote — W6 白名单扩展（观测/调试 5 键）', () => {
+  const NEW_BOOLEAN_KEYS = ['traceEnabled', 'recordInbound', 'inboxRedact', 'injectEnabled', 'injectDryRun'] as const
+  /** 期望默认值（摘自 src/index.ts schema：injectDryRun 默认开，其余默认关）。 */
   const NEW_DEFAULTS: Record<string, boolean> = {
-    actionAuditEnabled: true,
     traceEnabled: false,
     recordInbound: false,
     inboxRedact: false,
@@ -286,10 +285,10 @@ describe('onebotSettings remote — W6 白名单扩展（W1/W2 观测/调试 6 �
     injectDryRun: true,
   }
 
-  it('6 个新键入快照：默认值正确、落在 diagnostics 组、计入 ALL_KEYS', () => {
+  it('5 个新键入快照：默认值正确、落在 diagnostics 组、计入 ALL_KEYS', () => {
     const editor = new FakeConfigEditor()
     const snapshot = getSettings(editor, createRevisionState())
-    expect(ALL_KEYS).toHaveLength(29) // W6 19→25、W7 25→26（workspacePath）、T2 26→27（newMessagePolicy）、T9 27→28（autoSteerPolicy）、T3 28→29（deferredTimeoutMs）
+    expect(ALL_KEYS).toHaveLength(33)
     expect(snapshot.groups.diagnostics).toEqual([...NEW_BOOLEAN_KEYS])
     for (const key of NEW_BOOLEAN_KEYS) {
       expect(snapshot.config[key]).toBe(NEW_DEFAULTS[key])
@@ -315,7 +314,6 @@ describe('onebotSettings remote — W6 白名单扩展（W1/W2 观测/调试 6 �
     const writes = editor.editCalls
 
     for (const [key, value] of [
-      ['actionAuditEnabled', 'yes'],
       ['traceEnabled', 1],
       ['recordInbound', null],
       ['inboxRedact', ['true']],
@@ -380,10 +378,10 @@ describe('onebotSettings remote — W6 失败守卫（configEditor 失败场景�
   })
 })
 
-describe('onebotSettings remote — W7 workspacePath 白名单扩展（connection 组 26 键）', () => {
-  it('workspacePath 入快照：默认值 \'\'、connection 组键序追加、ALL_KEYS 25→26', () => {
+describe('onebotSettings remote — W7 workspacePath 白名单（connection 组）', () => {
+  it('workspacePath 入快照：默认值 \'\'、connection 组键序追加、计入 ALL_KEYS', () => {
     const snapshot = getSettings(new FakeConfigEditor(), createRevisionState())
-    expect(ALL_KEYS).toHaveLength(29) // T2 26→27（newMessagePolicy 入 behavior 组）、T9 27→28（autoSteerPolicy）、T3 28→29（deferredTimeoutMs）
+    expect(ALL_KEYS).toHaveLength(33)
     expect(SCHEMA_DEFAULTS.workspacePath).toBe('')
     expect(SETTINGS_GROUPS.connection).toEqual(['mode', 'host', 'port', 'url', 'accessToken', 'botQQ', 'workspacePath'])
     expect(snapshot.groups.connection).toEqual(SETTINGS_GROUPS.connection)
@@ -486,122 +484,92 @@ describe('onebotSettings remote — W7 listWorkspaces（workspace 注册表只�
   })
 })
 
-describe('onebotSettings remote — P1/T2 newMessagePolicy 白名单扩展（behavior 组 28 键）', () => {
-  it('newMessagePolicy 入快照：默认 \'queue\'、behavior 组尾追加、ALL_KEYS 26→27', () => {
+describe('onebotSettings remote — 插话四开关白名单扩展（behavior 组 14 键）', () => {
+  it('四开关入快照：默认值正确、behavior 组键序、ALL_KEYS 33', () => {
     const snapshot = getSettings(new FakeConfigEditor(), createRevisionState())
-    expect(ALL_KEYS).toHaveLength(29) // W7 25→26（workspacePath）、T2 26→27（newMessagePolicy）、T9 27→28（autoSteerPolicy）、T3 28→29（deferredTimeoutMs）
-    expect(SCHEMA_DEFAULTS.newMessagePolicy).toBe('queue')
+    expect(ALL_KEYS).toHaveLength(33)
+    expect(SCHEMA_DEFAULTS.steerEnabled).toBe(false)
+    expect(SCHEMA_DEFAULTS.steerAllMembers).toBe(false)
+    expect(SCHEMA_DEFAULTS.steerAllowRestricted).toBe(true)
+    expect(SCHEMA_DEFAULTS.steerNotice).toBe(true)
     expect(SETTINGS_GROUPS.behavior).toEqual([
-      'interimMessages', 'interimRecall', 'interimRecallMs', 'sendErrorNotice', 'unknownCommand', 'rateLimitPerMinute', 'newMessagePolicy', 'autoSteerPolicy', 'deferredTimeoutMs',
+      'sendErrorNotice', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages', 'steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'steerNotice', 'sleepMode', 'sleepStart', 'sleepEnd', 'extraPromptPrivate', 'extraPromptGroup',
     ])
     expect(snapshot.groups.behavior).toEqual(SETTINGS_GROUPS.behavior)
-    expect(snapshot.config.newMessagePolicy).toBe('queue')
-    expect(snapshot.effect).toBe('restart') // 与全部 28 键同粒度：热重启生效
+    expect(snapshot.config.steerEnabled).toBe(false)
+    expect(snapshot.config.steerAllMembers).toBe(false)
+    expect(snapshot.config.steerAllowRestricted).toBe(true)
+    expect(snapshot.config.steerNotice).toBe(true)
+    expect(snapshot.effect).toBe('restart') // 与全部 33 键同粒度：热重启生效
   })
 
-  it('newMessagePolicy 写入走枚举通道：\'steer\' 合法进覆盖行并递增 revision；非法值拒写 bad-request 且 edit 零调用', async () => {
+  it('四开关写入走布尔通道：合法值进覆盖行并递增 revision；非法值拒写 bad-request 且 edit 零调用', async () => {
     const editor = new FakeConfigEditor()
     const state = createRevisionState()
-    const written = await updateSettings(editor, state, { newMessagePolicy: 'steer' })
+    const written = await updateSettings(editor, state, { steerEnabled: true, steerAllMembers: true, steerAllowRestricted: false, steerNotice: false })
     expect(written.revision).toBe(1)
-    expect(written.config.newMessagePolicy).toBe('steer')
     expect(editor.writeCount).toBe(1)
-    expect(editor.rows[0].config.newMessagePolicy).toBe('steer')
+    expect(editor.rows[0].config).toMatchObject({ steerEnabled: true, steerAllMembers: true, steerAllowRestricted: false, steerNotice: false })
 
     const writes = editor.editCalls
-    for (const value of ['intercept', 'QUEUE', 1, null, true]) {
-      await expect(updateSettings(editor, state, { newMessagePolicy: value })).rejects.toMatchObject({
-        code: 'onebot-settings/bad-request',
-      })
+    for (const key of ['steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'steerNotice']) {
+      for (const value of ['true', 1, null, 'on']) {
+        await expect(updateSettings(editor, state, { [key]: value })).rejects.toMatchObject({
+          code: 'onebot-settings/bad-request',
+        })
+      }
     }
     expect(editor.editCalls).toBe(writes) // 拒写绝不触达宿主 edit
     expect(getSettings(editor, state).revision).toBe(1)
-    expect(getSettings(editor, state).config.newMessagePolicy).toBe('steer') // 拒写不改生效值
+    expect(getSettings(editor, state).config.steerEnabled).toBe(true) // 拒写不改生效值
   })
 
-  it('no-op 语义不变：写回当前生效值 \'queue\' 不递增 revision、零落盘', async () => {
-    const editor = new FakeConfigEditor({ newMessagePolicy: 'queue' })
+  it('no-op 语义不变：写回当前生效值不递增 revision、零落盘', async () => {
+    const editor = new FakeConfigEditor({ steerEnabled: false, steerAllMembers: false, steerAllowRestricted: true, steerNotice: true })
     const state = createRevisionState()
-    const written = await updateSettings(editor, state, { newMessagePolicy: 'queue' })
+    const written = await updateSettings(editor, state, { steerAllowRestricted: true })
     expect(written.revision).toBe(0)
     expect(editor.writeCount).toBe(0)
     expect(editor.rows).toHaveLength(0)
   })
 })
 
-describe('onebotSettings remote — T9 autoSteerPolicy 白名单扩展（behavior 组 27→28 键，用户裁决 2026-10-12）', () => {
-  it('autoSteerPolicy 入快照：默认 \'admin\'、behavior 组尾追加（newMessagePolicy 之后）、ALL_KEYS 27→28', () => {
+describe('onebotSettings remote — 出站节流三键（behavior 组）', () => {
+  it('三键入快照：默认 300/60/30、behavior 组键序、ALL_KEYS 33', () => {
     const snapshot = getSettings(new FakeConfigEditor(), createRevisionState())
-    expect(ALL_KEYS).toHaveLength(29) // W7 25→26（workspacePath）、T2 26→27（newMessagePolicy）、T9 27→28（autoSteerPolicy）、T3 28→29（deferredTimeoutMs）
-    expect(SCHEMA_DEFAULTS.autoSteerPolicy).toBe('admin')
-    expect(SETTINGS_GROUPS.behavior).toEqual([
-      'interimMessages', 'interimRecall', 'interimRecallMs', 'sendErrorNotice', 'unknownCommand', 'rateLimitPerMinute', 'newMessagePolicy', 'autoSteerPolicy', 'deferredTimeoutMs',
-    ])
-    expect(snapshot.groups.behavior).toEqual(SETTINGS_GROUPS.behavior)
-    expect(snapshot.config.autoSteerPolicy).toBe('admin')
-    expect(snapshot.effect).toBe('restart') // 与全部 28 键同粒度：热重启生效
+    expect(ALL_KEYS).toHaveLength(33)
+    expect(SCHEMA_DEFAULTS.outboundIntervalBaseMs).toBe(300)
+    expect(SCHEMA_DEFAULTS.outboundIntervalPerCharMs).toBe(60)
+    expect(SCHEMA_DEFAULTS.outboundIntervalJitterPct).toBe(30)
+    expect(snapshot.config.outboundIntervalBaseMs).toBe(300)
+    expect(snapshot.config.outboundIntervalPerCharMs).toBe(60)
+    expect(snapshot.config.outboundIntervalJitterPct).toBe(30)
+    expect(snapshot.effect).toBe('restart')
   })
 
-  it('autoSteerPolicy 写入走枚举通道：\'all\' 合法进覆盖行并递增 revision；非法值拒写 bad-request 且 edit 零调用', async () => {
+  it('三键写入走数字通道（≥0，抖动 0–100）：合法值进覆盖行；非法值拒写 bad-request', async () => {
     const editor = new FakeConfigEditor()
     const state = createRevisionState()
-    const written = await updateSettings(editor, state, { autoSteerPolicy: 'all' })
+    const written = await updateSettings(editor, state, {
+      outboundIntervalBaseMs: 0, outboundIntervalPerCharMs: 10, outboundIntervalJitterPct: 100,
+    })
     expect(written.revision).toBe(1)
-    expect(written.config.autoSteerPolicy).toBe('all')
     expect(editor.writeCount).toBe(1)
-    expect(editor.rows[0].config.autoSteerPolicy).toBe('all')
+    expect(editor.rows[0].config).toMatchObject({
+      outboundIntervalBaseMs: 0, outboundIntervalPerCharMs: 10, outboundIntervalJitterPct: 100,
+    })
 
     const writes = editor.editCalls
-    for (const value of ['admin ', 'ADMIN', 'member', 1, null, true]) {
-      await expect(updateSettings(editor, state, { autoSteerPolicy: value })).rejects.toMatchObject({
+    for (const [key, value] of [
+      ['outboundIntervalBaseMs', -1],
+      ['outboundIntervalPerCharMs', '60'],
+      ['outboundIntervalJitterPct', 101],
+    ] as const) {
+      await expect(updateSettings(editor, state, { [key]: value })).rejects.toMatchObject({
         code: 'onebot-settings/bad-request',
       })
     }
-    expect(editor.editCalls).toBe(writes) // 拒写绝不触达宿主 edit
+    expect(editor.editCalls).toBe(writes)
     expect(getSettings(editor, state).revision).toBe(1)
-    expect(getSettings(editor, state).config.autoSteerPolicy).toBe('all') // 拒写不改生效值
-  })
-
-  it('no-op 语义不变：写回当前生效值 \'admin\' 不递增 revision、零落盘', async () => {
-    const editor = new FakeConfigEditor({ autoSteerPolicy: 'admin' })
-    const state = createRevisionState()
-    const written = await updateSettings(editor, state, { autoSteerPolicy: 'admin' })
-    expect(written.revision).toBe(0)
-    expect(editor.writeCount).toBe(0)
-    expect(editor.rows).toHaveLength(0)
-  })
-})
-
-describe('onebotSettings remote — T3 deferredTimeoutMs 白名单扩展（behavior 组 28→29 键）', () => {
-  it('deferredTimeoutMs 入快照：默认 600000、behavior 组尾追加（autoSteerPolicy 之后）、ALL_KEYS 28→29', () => {
-    const snapshot = getSettings(new FakeConfigEditor(), createRevisionState())
-    expect(ALL_KEYS).toHaveLength(29) // W7 25→26（workspacePath）、T2 26→27（newMessagePolicy）、T9 27→28（autoSteerPolicy）、T3 28→29（deferredTimeoutMs）
-    expect(SCHEMA_DEFAULTS.deferredTimeoutMs).toBe(600_000)
-    expect(SETTINGS_GROUPS.behavior).toEqual([
-      'interimMessages', 'interimRecall', 'interimRecallMs', 'sendErrorNotice', 'unknownCommand', 'rateLimitPerMinute', 'newMessagePolicy', 'autoSteerPolicy', 'deferredTimeoutMs',
-    ])
-    expect(snapshot.groups.behavior).toEqual(SETTINGS_GROUPS.behavior)
-    expect(snapshot.config.deferredTimeoutMs).toBe(600_000)
-    expect(snapshot.effect).toBe('restart') // 与全部 29 键同粒度：热重启生效
-  })
-
-  it('deferredTimeoutMs 写入走数字通道（≥0）：合法值进覆盖行并递增 revision；非法值拒写 bad-request 且 edit 零调用', async () => {
-    const editor = new FakeConfigEditor()
-    const state = createRevisionState()
-    const written = await updateSettings(editor, state, { deferredTimeoutMs: 300_000 })
-    expect(written.revision).toBe(1)
-    expect(written.config.deferredTimeoutMs).toBe(300_000)
-    expect(editor.writeCount).toBe(1)
-    expect(editor.rows[0].config.deferredTimeoutMs).toBe(300_000)
-
-    const writes = editor.editCalls
-    for (const value of [-1, '600000', null, true, Number.NaN]) {
-      await expect(updateSettings(editor, state, { deferredTimeoutMs: value })).rejects.toMatchObject({
-        code: 'onebot-settings/bad-request',
-      })
-    }
-    expect(editor.editCalls).toBe(writes) // 拒写绝不触达宿主 edit
-    expect(getSettings(editor, state).revision).toBe(1)
-    expect(getSettings(editor, state).config.deferredTimeoutMs).toBe(300_000) // 拒写不改生效值
   })
 })

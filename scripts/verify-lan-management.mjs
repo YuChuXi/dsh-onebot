@@ -186,9 +186,9 @@ async function prepareDeployment(deploy, host) {
         await linkInto(deploy, 'ws', join(hostNm, 'ws'));
         linked.push('ws');
     }
-    // 渲染依赖（@napi-rs/canvas、fontkit）从本仓库自身 node_modules 解析（真实目录）。
+    // 图片压缩依赖（@napi-rs/canvas）从本仓库自身 node_modules 解析（真实目录）。
     const repoRequire = createRequire(join(PLUGIN_ROOT, 'package.json'));
-    for (const pkg of ['@napi-rs/canvas', 'fontkit']) {
+    for (const pkg of ['@napi-rs/canvas']) {
         try {
             // exports 字段可能不暴露 ./package.json，故解析包入口文件再回溯包根目录。
             const entry = repoRequire.resolve(pkg);
@@ -205,7 +205,7 @@ async function prepareDeployment(deploy, host) {
         }
     }
     if (missing.length > 0) {
-        // 关键 peer（无则插件无法挂载）→ 显式降级；canvas/fontkit 缺失同样阻断挂载。
+        // 关键 peer（无则插件无法挂载）→ 显式降级；canvas 缺失同样阻断挂载。
         throw new Error('DEGRADE: 临时部署副本缺以下依赖链接（插件无法挂载，管理面测试跳过）:\n' +
             missing.map(pkg => 'DEGRADE:   - ' + pkg).join('\n') +
             '\nDEGRADE: 已链接: ' + linked.join(', '));

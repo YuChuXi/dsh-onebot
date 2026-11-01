@@ -1,0 +1,47 @@
+/**
+ * qq_* 工具共用的执行环境：目标会话解析与出站媒体围栏根目录。
+ * @module dsh-onebot/tools/shared
+ */
+import type { Context } from '@deepseek-ai/cordis';
+import type { ToolRunContext } from '@deepseek-ai/dsh-tools';
+import type { ChatBridge } from '../bridge/index.js';
+/** 工具注册回调（ctx.tools.register 的参数类型）。 */
+export type RegisterTool = (tool: Parameters<Context['tools']['register']>[0]) => void;
+/** 出站媒体大小上限（发送工具族共用）。 */
+export interface MediaLimits {
+    maxImageBytes: number;
+    maxVoiceBytes: number;
+    maxFileBytes: number;
+}
+/**
+ * Resolve the target chat for a tool call.
+ *
+ * Args:
+ *   bridge (ChatBridge): 负责 session → chat 反查的桥接对象。
+ *   exec (ToolRunContext): 宿主给出的工具执行上下文。
+ *   chatIdArg (unknown): 工具参数里的 chat_id。
+ *
+ * Returns:
+ *   string: 目标会话 id。
+ *
+ * Callers:
+ *   - `tools/send.ts:registerSendTools`、`tools/index.ts:registerTools`。
+ */
+export declare function resolveChat(bridge: ChatBridge, exec: ToolRunContext, chatIdArg: unknown): string;
+/**
+ * Outbound media fence roots for the calling session's current turn
+ * (M1-A3b): the plugin media dir always, plus the chat workspace on admin
+ * turns. An unknown caller session degrades to mediaDir-only inside the
+ * bridge — fail-closed.
+ *
+ * Args:
+ *   bridge (ChatBridge): 提供回合级媒体围栏根的桥接对象。
+ *   exec (ToolRunContext): 宿主给出的工具执行上下文。
+ *
+ * Returns:
+ *   Promise<string[]>: 允许读取的媒体根目录。
+ *
+ * Callers:
+ *   - `tools/send.ts:registerSendTools`。
+ */
+export declare function mediaRoots(bridge: ChatBridge, exec: ToolRunContext): Promise<string[]>;

@@ -1,7 +1,7 @@
 {
   "name": "dsh-onebot-qq",
   "version": "0.9.8",
-  "description": "给 dsh（DeepSeek Harness）加 QQ 机器人通道：OneBot 11 协议，兼容 NapCat，支持私聊群聊、图片语音、t2i 卡片与设置页配置。QQ bot channel plugin for deepseek harness via OneBot 11.",
+  "description": "给 dsh（DeepSeek Harness）加 QQ 机器人通道：OneBot 11 协议，兼容 NapCat，支持私聊群聊、图片语音与设置页配置。QQ bot channel plugin for deepseek harness via OneBot 11.",
   "keywords": [
     "dsh",
     "onebot",
@@ -61,13 +61,16 @@
   "dshx": {
     "contributes": {
       "tools": [
+        "qq_send_message",
+        "qq_send_text",
         "qq_send_image",
         "qq_send_voice",
         "qq_send_video",
         "qq_send_file",
         "qq_send_forward",
         "qq_napcat_api",
-        "qq_group_history"
+        "qq_group_history",
+        "qq_thinking"
       ],
       "skills": []
     }
@@ -86,7 +89,6 @@
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.6",
-    "fontkit": "^2.0.4",
     "schemastery": "^3.18.0",
     "ws": "^8.18.0"
   },

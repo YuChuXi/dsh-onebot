@@ -15,14 +15,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 
-import { OneBotConnection } from '../src/connection.js'
-import { ChatBridge } from '../src/bridge.js'
-import { ChatRegistry } from '../src/registry.js'
-import type { RegistryDeps } from '../src/registry.js'
-import type { BridgeConfig } from '../src/bridge.js'
-import { MediaStore } from '../src/media.js'
-import { Transcriber } from '../src/stt.js'
-import { shortSessionId } from '../src/commands.js'
+import { OneBotConnection } from '../src/onebot/connection.js'
+import { ChatBridge } from '../src/bridge/index.js'
+import { ChatRegistry } from '../src/registry/index.js'
+import type { RegistryDeps } from '../src/registry/index.js'
+import type { BridgeConfig } from '../src/bridge/index.js'
+import { MediaStore } from '../src/media/store.js'
+import { Transcriber } from '../src/media/stt.js'
+import { shortSessionId } from '../src/commands/preview.js'
 
 import { makeCmdHarness, makeEvent, makeHarness } from './helpers/bridge-harness.js'
 
@@ -137,10 +137,9 @@ async function makeRestartBridge(mediaDir: string, opts?: { failResumeIds?: stri
     defaultModel: undefined,
     config: {
       botQQ: '10002', ignoreSelf: false, requireMention: true,
-      interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-      sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+      sendErrorNotice: true, restrictedMemberPrefix: false,
+      mediaDir, maxImageBytes: 8 * 1024 * 1024,
       maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-      textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
     },
     policy: {
       dmPolicy: 'open', groupPolicy: 'open', allowFrom: [], groupAllowFrom: [],
@@ -454,7 +453,7 @@ describe('/session command (bridge harness)', () => {
     expect(s2).not.toBe(s1)
 
     // List first: the numeric pick resolves against the snapshot the bare
-    // form rendered (same R2 contract as /workspace|/model|/preset).
+    // form rendered (same R2 contract as /model).
     h.sendText('/session')
     await vi.waitFor(() => {
       // New item format: preview placeholder (this harness has no persistence
@@ -582,21 +581,4 @@ describe('/session command (bridge harness)', () => {
     await h.bridge.stop()
     await h.connection.stop()
   }, 30_000)
-
-  it('/status shows the switchable count', async () => {
-    const h = await makeCmdHarness()
-    h.sendText('你好')
-    await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
-    h.sendText('/new')
-    await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('已开启新会话'))).toBe(true)
-    })
-    h.sendText('/status')
-    await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('可切回   : 1 条历史会话'))).toBe(true)
-    })
-    h.client.close()
-    await h.bridge.stop()
-    await h.connection.stop()
-  }, 60_000)
 })

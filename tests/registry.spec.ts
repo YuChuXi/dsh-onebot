@@ -16,13 +16,13 @@ import { Context } from '@deepseek-ai/cordis'
 import WebSocket from 'ws'
 import type {} from '@deepseek-ai/dsh-session'
 
-import { OneBotConnection } from '../src/connection.js'
-import { ChatBridge } from '../src/bridge.js'
-import { ChatRegistry, resolveRecordedPreset } from '../src/registry.js'
-import type { ChatSettings, RegistryDeps } from '../src/registry.js'
-import type { BridgeConfig } from '../src/bridge.js'
-import { MediaStore } from '../src/media.js'
-import { Transcriber } from '../src/stt.js'
+import { OneBotConnection } from '../src/onebot/connection.js'
+import { ChatBridge } from '../src/bridge/index.js'
+import { ChatRegistry, resolveRecordedPreset } from '../src/registry/index.js'
+import type { ChatSettings, RegistryDeps } from '../src/registry/index.js'
+import type { BridgeConfig } from '../src/bridge/config.js'
+import { MediaStore } from '../src/media/store.js'
+import { Transcriber } from '../src/media/stt.js'
 
 import { makeCmdHarness, makeEvent, makeFakeAgents, makeHarness } from './helpers/bridge-harness.js'
 
@@ -85,10 +85,9 @@ describe('ChatRegistry', () => {
       defaultModel: undefined,
       config: {
         botQQ: '10002', ignoreSelf: false, requireMention: true,
-        interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-        sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+        sendErrorNotice: true, restrictedMemberPrefix: false,
+        mediaDir, maxImageBytes: 8 * 1024 * 1024,
         maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-        textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
       },
       policy: {
         dmPolicy: 'open', groupPolicy: 'open', allowFrom: [], groupAllowFrom: [],
@@ -140,12 +139,11 @@ describe('ChatRegistry', () => {
       const retired = JSON.parse(await readFile(join(h.mediaDir, 'retired-sessions.json'), 'utf8')) as string[]
       expect(retired).toContain('onebot-private-10001')
     })
-    // Session events route to the chat through the REAL id.
+    // Session events route to the chat through the REAL id: the model's tool
+    // send targets the chat explicitly (sessionIds[0] is the failed attempt).
     const session = { id: fallback }
-    h.ctx.emit('session/event', session as never, makeEvent('assistant/message', {
-      turn: 1, step: 1,
-      message: { role: 'assistant', content: [{ type: 'text', text: '兜底回复' }] },
-    }))
+    h.ctx.emit('session/event', session as never, makeEvent('turn/start', { turn: 1 }))
+    await h.say('兜底回复', { chat_id: 'private:10001' })
     h.ctx.emit('session/event', session as never, makeEvent('turn/end', { turn: 1, reason: { kind: 'completed' } }))
     await vi.waitFor(() => {
       expect(h.outbound.some(f => f.action === 'send_msg' && JSON.stringify(f.params).includes('兜底回复'))).toBe(true)
@@ -229,10 +227,9 @@ describe('ChatRegistry', () => {
       defaultModel: undefined,
       config: {
         botQQ: '10002', ignoreSelf: false, requireMention: true,
-        interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-        sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+        sendErrorNotice: true, restrictedMemberPrefix: false,
+        mediaDir, maxImageBytes: 8 * 1024 * 1024,
         maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-        textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
         agentPreset: 'standard', workspacePath: mediaDir,
       },
       policy: {
@@ -314,10 +311,9 @@ describe('ChatRegistry', () => {
       defaultModel: undefined,
       config: {
         botQQ: '10002', ignoreSelf: false, requireMention: true,
-        interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-        sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+        sendErrorNotice: true, restrictedMemberPrefix: false,
+        mediaDir, maxImageBytes: 8 * 1024 * 1024,
         maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-        textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
         agentPreset: '', workspacePath: mediaDir,
       },
       policy: {
@@ -393,10 +389,9 @@ describe('ChatRegistry', () => {
       defaultModel: undefined,
       config: {
         botQQ: '10002', ignoreSelf: false, requireMention: true,
-        interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-        sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+        sendErrorNotice: true, restrictedMemberPrefix: false,
+        mediaDir, maxImageBytes: 8 * 1024 * 1024,
         maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-        textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
         agentPreset: 'standard', workspacePath: mediaDir,
       },
       policy: {
@@ -460,10 +455,9 @@ describe('ChatRegistry', () => {
       defaultModel: undefined,
       config: {
         botQQ: '10002', ignoreSelf: false, requireMention: true,
-        interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-        sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+        sendErrorNotice: true, restrictedMemberPrefix: false,
+        mediaDir, maxImageBytes: 8 * 1024 * 1024,
         maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-        textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
         agentPreset: '', workspacePath: mediaDir,
       },
       policy: {
@@ -513,10 +507,9 @@ describe('ChatRegistry', () => {
       defaultModel: undefined,
       config: {
         botQQ: '10002', ignoreSelf: false, requireMention: true,
-        interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-        sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+        sendErrorNotice: true, restrictedMemberPrefix: false,
+        mediaDir, maxImageBytes: 8 * 1024 * 1024,
         maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-        textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
         agentPreset: '', workspacePath: mediaDir,
       },
       policy: {
@@ -559,10 +552,9 @@ describe('ChatRegistry', () => {
       defaultModel: undefined,
       config: {
         botQQ: '10002', ignoreSelf: false, requireMention: true,
-        interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-        sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+        sendErrorNotice: true, restrictedMemberPrefix: false,
+        mediaDir, maxImageBytes: 8 * 1024 * 1024,
         maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-        textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
         agentPreset: '', workspacePath: mediaDir,
       },
       policy: {
@@ -621,10 +613,9 @@ describe('ChatRegistry', () => {
       defaultModel: undefined,
       config: {
         botQQ: '10002', ignoreSelf: false, requireMention: true,
-        interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-        sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+        sendErrorNotice: true, restrictedMemberPrefix: false,
+        mediaDir, maxImageBytes: 8 * 1024 * 1024,
         maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-        textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
         agentPreset: '', workspacePath: mediaDir,
       },
       policy: {
@@ -690,10 +681,9 @@ describe('ChatRegistry', () => {
       defaultModel: undefined,
       config: {
         botQQ: '10002', ignoreSelf: false, requireMention: true,
-        interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-        sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+        sendErrorNotice: true, restrictedMemberPrefix: false,
+        mediaDir, maxImageBytes: 8 * 1024 * 1024,
         maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-        textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
         agentPreset: 'standard', workspacePath: mediaDir,
       },
       policy: {
@@ -748,10 +738,9 @@ describe('ChatRegistry', () => {
       defaultModel: undefined,
       config: {
         botQQ: '10002', ignoreSelf: false, requireMention: true,
-        interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-        sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+        sendErrorNotice: true, restrictedMemberPrefix: false,
+        mediaDir, maxImageBytes: 8 * 1024 * 1024,
         maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-        textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
         agentPreset: 'standard', workspacePath: mediaDir,
       },
       policy: {
@@ -789,10 +778,9 @@ describe('ChatRegistry', () => {
       defaultModel: undefined,
       config: {
         botQQ: '10002', ignoreSelf: false, requireMention: true,
-        interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-        sensitivePatterns: [], mediaDir: bridge2Dir, maxImageBytes: 8 * 1024 * 1024,
+        sendErrorNotice: true, restrictedMemberPrefix: false,
+        mediaDir: bridge2Dir, maxImageBytes: 8 * 1024 * 1024,
         maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-        textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
         agentPreset: 'standard', workspacePath: realpathSync(bridge2Dir),
       },
       policy: {
@@ -879,10 +867,9 @@ describe('ChatRegistry', () => {
       defaultModel: () => ({ provider: 'deepseek', model: 'deepseek-chat' }),
       config: {
         botQQ: '10002', ignoreSelf: false, requireMention: true,
-        interimMessages: true, sendErrorNotice: true, restrictedMemberPrefix: false,
-        sensitivePatterns: [], mediaDir: h.mediaDir, maxImageBytes: 8 * 1024 * 1024,
+        sendErrorNotice: true, restrictedMemberPrefix: false,
+        mediaDir: h.mediaDir, maxImageBytes: 8 * 1024 * 1024,
         maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-        textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
         agentPreset: 'standard', workspacePath: h.mediaDir,
       },
       policy: {
@@ -939,16 +926,13 @@ describe('ChatRegistry', () => {
     await h.connection.stop()
   }, 30_000)
 
-  it('per-chat settings survive /new: workspace, preset, mode, goal, last image and pending ref (D1-PR3)', async () => {
+  it('per-chat settings survive /new: workspace, preset, watermark (D1-PR3)', async () => {
     const h = await makeCmdHarness()
     const registry = registryOf(h)
     const settings = (): ChatSettings => registry.getSettings('private:10001')
-    registry.getSettings('private:10001').workspacePath = '/ws/dir'
-    registry.getSettings('private:10001').presetOverride = 'minimal'
-    registry.getSettings('private:10001').interimOverride = false
-    registry.getSettings('private:10001').goal = '把事情做好'
-    registry.getSettings('private:10001').lastImagePath = '/media/a.png'
-    registry.getSettings('private:10001').pendingImageRef = { kind: 'image', url: 'http://x/a.jpg' }
+    settings().workspacePath = '/ws/dir'
+    settings().presetOverride = 'minimal'
+    settings().recentWatermark = { time: 1_760_000_000, id: '5001' }
     h.sendText('/new')
     await vi.waitFor(() => expect(h.outbound.some(f => JSON.stringify(f.params).includes('已开启新会话'))).toBe(true))
     // /new retires the session but never clears the settings entry — every
@@ -956,15 +940,7 @@ describe('ChatRegistry', () => {
     // semantics, kept verbatim).
     expect(settings().workspacePath).toBe('/ws/dir')
     expect(settings().presetOverride).toBe('minimal')
-    expect(settings().interimOverride).toBe(false)
-    expect(settings().goal).toBe('把事情做好')
-    expect(settings().lastImagePath).toBe('/media/a.png')
-    expect(settings().pendingImageRef).toEqual({ kind: 'image', url: 'http://x/a.jpg' })
-    // takePendingImageRef consumes exactly once.
-    expect(settings().pendingImageRef).toBeDefined()
-    const taken = registry.getSettings('private:10001').pendingImageRef
-    registry.getSettings('private:10001').pendingImageRef = undefined
-    expect(taken).toEqual({ kind: 'image', url: 'http://x/a.jpg' })
+    expect(settings().recentWatermark).toEqual({ time: 1_760_000_000, id: '5001' })
 
     h.client.close()
     await h.bridge.stop()

@@ -2,8 +2,8 @@
  * Shared bridge test harnesses (M2-T0 migration map §1): the fake agent
  * registry, the full reverse-WS harness, the compact command harness, and
  * the M1-B6 disconnect/reconnect helpers. Extracted from bridge.spec.ts so
- * the five-split target specs (commands/inbound/outbound/interim/registry)
- * can reuse the same stubs.
+ * the split target specs (commands/inbound/outbound/registry) can reuse the
+ * same stubs.
  * @module dsh-onebot/tests/helpers/bridge-harness
  */
 import { expect, vi } from 'vitest'
@@ -14,26 +14,29 @@ import { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import WebSocket from 'ws'
 
-import { OneBotConnection } from '../../src/connection.js'
-import { ChatBridge } from '../../src/bridge.js'
-import { MediaStore } from '../../src/media.js'
-import { Transcriber } from '../../src/stt.js'
-import { TraceSink } from '../../src/trace.js'
-import { InboundRecorder } from '../../src/record.js'
-import { InjectChannel } from '../../src/inject.js'
+import { OneBotConnection } from '../../src/onebot/connection.js'
+import { ChatBridge } from '../../src/bridge/index.js'
+import { MediaStore } from '../../src/media/store.js'
+import { Transcriber } from '../../src/media/stt.js'
+import { TraceSink } from '../../src/ops/trace.js'
+import { InboundRecorder } from '../../src/ops/record.js'
+import { InjectChannel } from '../../src/inbound/inject.js'
 
 /** dsh 0.2.2 host-faithful Agent.model stub: current() returns the last
  * recorded selection, else the agentOptions fallback (provider/model), else
  * undefined; select() records the selection — mirroring the durable
- * model/selection event the host's AgentModel appends. */
+ * model/selection event the host's AgentModel appends. Selections keep every
+ * field the bridge wrote (reasoningEffort included) so qq_thinking assertions
+ * can read back the full selection object. */
 function makeFakeModel(agentOptions?: { provider?: string; model?: string }) {
-  const selections: Array<{ provider: string; model: string }> = []
+  type Selection = { provider: string; model: string; reasoningEffort?: string }
+  const selections: Selection[] = []
   return {
-    current: () => selections[selections.length - 1]
+    current: (): Selection | undefined => selections[selections.length - 1]
       ?? (agentOptions?.provider !== undefined && agentOptions?.model !== undefined
         ? { provider: agentOptions.provider, model: agentOptions.model }
         : undefined),
-    select: (next: { provider: string; model: string }) => { selections.push({ provider: next.provider, model: next.model }) },
+    select: (next: Selection) => { selections.push({ ...next }) },
     selections,
   }
 }
@@ -41,7 +44,15 @@ function makeFakeModel(agentOptions?: { provider?: string; model?: string }) {
 /** A fake agent handle for the bridge. */
 export function makeFakeAgents(
   sessionIds: string[],
-  captured: { followups: Array<{ text: string; sessionId: string }>; steers?: Array<{ text: string; sessionId: string }>; createdMeta?: Array<{ cwd?: string; agentPreset?: string }> },
+  captured: {
+    followups: Array<{ text: string; sessionId: string }>
+    steers?: Array<{ text: string; sessionId: string }>
+    createdMeta?: Array<{ cwd?: string; agentPreset?: string }>
+    channelTools?: string[]
+    channelSections?: string[]
+    /** 注册到会话作用域的工具定义（测试可像模型一样调用它们发言）。 */
+    tools?: Array<{ name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }>
+  },
   opts?: { failCreateFor?: string; resumeOk?: boolean; createDelayMs?: number },
 ) {
   const disposed: string[] = []
@@ -76,7 +87,13 @@ export function makeFakeAgents(
         const agentCtx = {
           on: () => () => undefined,
           systemPrompt: { section: (s: { name: string }) => { captured.channelSections?.push(s.name); return () => undefined } },
-          tools: { register: (t: { name: string }) => { captured.channelTools?.push(t.name); return () => undefined } },
+          tools: {
+            register: (t: { name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }) => {
+              captured.channelTools?.push(t.name)
+              captured.tools?.push(t)
+              return () => undefined
+            },
+          },
         }
         await options.setup(agentCtx)
       }
@@ -111,10 +128,16 @@ export function makeFakeAgents(
 }
 
 /** Full bridge + WS harness: inbound via real WebSocket, outbound captured. */
-export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: string; interimMessages?: boolean; textImageThreshold?: number; maxImageBytes?: number; resumeOk?: boolean; createDelayMs?: number; transcriber?: Transcriber; trace?: TraceSink; ignoreSelf?: boolean; recorder?: InboundRecorder; inject?: InjectChannel; newMessagePolicy?: 'queue' | 'steer'; deferredTimeoutMs?: number; log?: (level: string, message: string) => void }) {
+export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: string; maxImageBytes?: number; resumeOk?: boolean; createDelayMs?: number; transcriber?: Transcriber; trace?: TraceSink; ignoreSelf?: boolean; recorder?: InboundRecorder; inject?: InjectChannel; steerEnabled?: boolean; steerAllMembers?: boolean; steerAllowRestricted?: boolean; steerNotice?: boolean; log?: (level: string, message: string) => void }) {
   const ctx = new Context()
   const sessionIds: string[] = []
-  const captured = { followups: [] as Array<{ text: string; sessionId: string }>, steers: [] as Array<{ text: string; sessionId: string }>, channelTools: [] as string[], channelSections: [] as string[] }
+  const captured = {
+    followups: [] as Array<{ text: string; sessionId: string }>,
+    steers: [] as Array<{ text: string; sessionId: string }>,
+    channelTools: [] as string[],
+    channelSections: [] as string[],
+    tools: [] as Array<{ name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }>,
+  }
   const agents = makeFakeAgents(sessionIds, captured, opts)
   const sessions = { flush: vi.fn(async () => undefined) }
   const mediaDir = opts?.mediaDir ?? mkdtempSync(join(tmpdir(), 'onebot-test-'))
@@ -133,15 +156,16 @@ export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: st
     defaultModel: undefined,
     config: {
       botQQ: '10002', ignoreSelf: opts?.ignoreSelf ?? false, requireMention: true,
-      interimMessages: opts?.interimMessages ?? true, sendErrorNotice: true, restrictedMemberPrefix: false,
-      sensitivePatterns: [], mediaDir, maxImageBytes: opts?.maxImageBytes ?? 8 * 1024 * 1024,
+      sendErrorNotice: true, restrictedMemberPrefix: false,
+      outboundIntervalBaseMs: 0, outboundIntervalPerCharMs: 0, outboundIntervalJitterPct: 0,
+      mediaDir, maxImageBytes: opts?.maxImageBytes ?? 8 * 1024 * 1024,
       maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-      textImageThreshold: opts?.textImageThreshold ?? 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
       agentPreset: 'standard', workspacePath: mediaDir,
-      // T2 (P1): busy-turn policy override (absent = the 'queue' default).
-      ...(opts?.newMessagePolicy !== undefined ? { newMessagePolicy: opts.newMessagePolicy } : {}),
-      // T3 (P2): deferred-delivery timeout override (absent = the 10min default).
-      ...(opts?.deferredTimeoutMs !== undefined ? { deferredTimeoutMs: opts.deferredTimeoutMs } : {}),
+      // 插话四开关（缺省 = 不插话、仅管理员、受限成员放行、插话回执开）。
+      ...(opts?.steerEnabled !== undefined ? { steerEnabled: opts.steerEnabled } : {}),
+      ...(opts?.steerAllMembers !== undefined ? { steerAllMembers: opts.steerAllMembers } : {}),
+      ...(opts?.steerAllowRestricted !== undefined ? { steerAllowRestricted: opts.steerAllowRestricted } : {}),
+      ...(opts?.steerNotice !== undefined ? { steerNotice: opts.steerNotice } : {}),
       // W1: optional decision-trace sink (absent = tracing off).
       trace: opts?.trace,
       // W1/T5: optional recorder / inject channel (absent = feature off).
@@ -157,6 +181,14 @@ export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: st
   connection.onMessage = event => {
     void bridge.handleInbound(event)
   }
+  // 入站窗口会向 NapCat 拉群历史与群成员表：测试里没有真实的 OneBot 服务端，
+  // 用空结果作答，等价于「只有触发消息、没有可补的 @ 名字」。
+  const realCall = connection.call.bind(connection)
+  connection.call = (async (action: string, params: Record<string, unknown>) => {
+    if (action === 'get_group_msg_history') return { messages: [] }
+    if (action === 'get_group_member_list') return []
+    return await realCall(action, params)
+  }) as never
   bridge.start()
   connection.start()
   await vi.waitFor(() => expect(connection.address()).toBeDefined())
@@ -178,7 +210,16 @@ export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: st
       sender: { user_id: 10001, nickname: '小明' },
     }))
   }
-  return { ctx, sessionIds, captured, sessions, mediaDir, connection, bridge, client, outbound, sendText }
+  /** 像模型一样发言：调用会话作用域里的 qq_send_message（回合最终文本不会自动发送）。 */
+  const say = (text: string, extra: Record<string, unknown> = {}): Promise<unknown> => {
+    const tool = captured.tools.find(item => item.name === 'qq_send_message')
+    if (tool === undefined) throw new Error('qq_send_message 未注册')
+    return tool.execute({ text, ...extra }, {
+      agent: { session: { id: sessionIds[0] } },
+      concludeTurn: () => undefined,
+    })
+  }
+  return { ctx, sessionIds, captured, sessions, mediaDir, connection, bridge, client, outbound, sendText, say }
 }
 
 export function makeEvent(type: string, data: unknown): SessionEvent {
@@ -190,17 +231,14 @@ export async function makeCmdHarness(opts?: {
   agentPresets?: unknown
   dshHome?: string
   ocrResult?: unknown
-  interimMessages?: boolean
-  unknownCommand?: 'intercept' | 'passthrough'
-  interimRecallMs?: number
-  interimRecall?: boolean
-  rateLimitPerMinute?: number
   restrictedMemberPrefix?: boolean
-  newMessagePolicy?: 'queue' | 'steer'
-  /** T9-B: auto-steer eligibility knob; absent = the bridge default 'admin'. */
-  autoSteerPolicy?: 'admin' | 'all'
-  /** T3 (P2): deferred-delivery timeout override (absent = the 10min default). */
-  deferredTimeoutMs?: number
+  steerEnabled?: boolean
+  /** 插话资格：true = 所有成员，false/缺省 = 仅管理员。 */
+  steerAllMembers?: boolean
+  /** 受限成员插话：false = 一律排队，true/缺省 = 放行。 */
+  steerAllowRestricted?: boolean
+  /** 插话成功回执：false = 静默，true/缺省 = 回一句提示。 */
+  steerNotice?: boolean
   /** T3 (P2): media dir override（重启恢复测试复用同一目录的注册表/映射文件）。 */
   mediaDir?: string
   commands?: unknown
@@ -221,7 +259,12 @@ export async function makeCmdHarness(opts?: {
   const capturedMeta: Array<{ cwd?: string; agentPreset?: string }> = []
   // T2 (P1): steers are captured alongside followups so the /steer and
   // 'steer'-policy tests can assert the exact steered text.
-  const captured = { followups: [] as Array<{ text: string; sessionId: string }>, steers: [] as Array<{ text: string; sessionId: string }>, createdMeta: capturedMeta }
+  const captured = {
+    followups: [] as Array<{ text: string; sessionId: string }>,
+    steers: [] as Array<{ text: string; sessionId: string }>,
+    createdMeta: capturedMeta,
+    tools: [] as Array<{ name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }>,
+  }
   const agents = makeFakeAgents(sessionIds, captured)
   const sessions = { flush: vi.fn(async () => undefined) }
   const mediaDir = opts?.mediaDir ?? mkdtempSync(join(tmpdir(), 'onebot-test-'))
@@ -252,20 +295,15 @@ export async function makeCmdHarness(opts?: {
     defaultModel: () => ({ provider: 'deepseek', model: 'deepseek-chat' }),
     config: {
       botQQ: '10002', ignoreSelf: false, requireMention: true,
-      interimMessages: opts?.interimMessages ?? true,
-      ...(opts?.unknownCommand !== undefined ? { unknownCommand: opts.unknownCommand } : {}),
-      ...(opts?.interimRecallMs !== undefined ? { interimRecallMs: opts.interimRecallMs } : {}),
-      ...(opts?.interimRecall !== undefined ? { interimRecall: opts.interimRecall } : {}),
-      ...(opts?.rateLimitPerMinute !== undefined ? { rateLimitPerMinute: opts.rateLimitPerMinute } : {}),
+      outboundIntervalBaseMs: 0, outboundIntervalPerCharMs: 0, outboundIntervalJitterPct: 0,
       sendErrorNotice: true,
       ...(opts?.restrictedMemberPrefix !== undefined ? { restrictedMemberPrefix: opts.restrictedMemberPrefix } : {}),
-      ...(opts?.newMessagePolicy !== undefined ? { newMessagePolicy: opts.newMessagePolicy } : {}),
-      ...(opts?.autoSteerPolicy !== undefined ? { autoSteerPolicy: opts.autoSteerPolicy } : {}),
-      // T3 (P2): deferred-delivery timeout override (absent = the 10min default).
-      ...(opts?.deferredTimeoutMs !== undefined ? { deferredTimeoutMs: opts.deferredTimeoutMs } : {}),
-      sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+      ...(opts?.steerEnabled !== undefined ? { steerEnabled: opts.steerEnabled } : {}),
+      ...(opts?.steerAllMembers !== undefined ? { steerAllMembers: opts.steerAllMembers } : {}),
+      ...(opts?.steerAllowRestricted !== undefined ? { steerAllowRestricted: opts.steerAllowRestricted } : {}),
+      ...(opts?.steerNotice !== undefined ? { steerNotice: opts.steerNotice } : {}),
+      mediaDir, maxImageBytes: 8 * 1024 * 1024,
       maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-      textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
       agentPreset: 'standard', workspacePath: mediaDir,
       ...(opts?.trace !== undefined ? { trace: opts.trace } : {}),
     },
@@ -283,6 +321,13 @@ export async function makeCmdHarness(opts?: {
     }) as never
   }
   connection.onMessage = event => { void bridge.handleInbound(event) }
+  // 群历史窗口与成员表在测试里没有真实服务端：空结果 = 只注入触发消息。
+  const realCall = connection.call.bind(connection)
+  connection.call = (async (action: string, params: Record<string, unknown>) => {
+    if (action === 'get_group_msg_history') return { messages: [] }
+    if (action === 'get_group_member_list') return []
+    return await realCall(action, params)
+  }) as never
   bridge.start()
   connection.start()
   await vi.waitFor(() => expect(connection.address()).toBeDefined())
@@ -324,9 +369,18 @@ export async function makeCmdHarness(opts?: {
     }))
   }
   const chats = () => (bridge as unknown as {
-    chats: Map<string, { agent: { session: { id: string } }, lastFollowup: string | undefined, busy: boolean }>
+    chats: Map<string, { agent: { session: { id: string }; status: string }, lastFollowup: string | undefined, busy: boolean }>
   }).chats
-  return { ctx, sessionIds, capturedMeta, captured, sessions, mediaDir, connection, bridge, client, outbound, sendText, sendTextAs, sendGroupTextAs, chats }
+  /** 像模型一样发言：调用会话作用域里的 qq_send_message。 */
+  const say = (text: string, extra: Record<string, unknown> = {}): Promise<unknown> => {
+    const tool = captured.tools.find(item => item.name === 'qq_send_message')
+    if (tool === undefined) throw new Error('qq_send_message 未注册')
+    return tool.execute({ text, ...extra }, {
+      agent: { session: { id: sessionIds[0] } },
+      concludeTurn: () => undefined,
+    })
+  }
+  return { ctx, sessionIds, capturedMeta, captured, sessions, mediaDir, connection, bridge, client, outbound, sendText, sendTextAs, sendGroupTextAs, chats, say }
 }
 
 /** Close the harness client and wait until the bridge sees the disconnect. */

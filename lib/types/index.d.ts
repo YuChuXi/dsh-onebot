@@ -3,8 +3,8 @@
  *
  * Mounts inside the dsh host process: a reverse- or forward-WebSocket link to
  * NapCat, one Agent per QQ chat, inbound images/voice handled for the model
- * (whisper STT when enabled), outbound replies split at sentence boundaries,
- * [[qq_forward]] merged forwards, allowlist/mention access control, and a set
+ * (whisper STT when enabled), outbound sends driven exclusively by qq_* tool
+ * calls, merged-forward sending, allowlist/mention access control, and a set
  * of qq_* tools for media and NapCat APIs.
  * @module dsh-onebot
  */
@@ -15,7 +15,7 @@ import type { AgentRegistry } from '@deepseek-ai/dsh-agent';
 import type { SessionStore } from '@deepseek-ai/dsh-session';
 import type { ModelSelection } from '@deepseek-ai/dsh-agent';
 import type Z from '@deepseek-ai/schemastery';
-import type { OneBotEvent } from './connection.js';
+import type { OneBotEvent } from './onebot/connection.js';
 type Context = CordisContext & {
     tools: ToolRuntime;
     systemPrompt: SystemPrompt;
@@ -36,8 +36,7 @@ type Context = CordisContext & {
     };
     sessionPersistence: {
         /** dsh-session-persistence 0.1.6 `stat`: the stored snapshot, or
-         * undefined when the id owns no durable log (the retired `inspect`
-         * convenience no longer exists on the host service). */
+         * undefined when the id owns no durable log. */
         stat(id: string): Promise<object | undefined>;
         /** /session list previews: open a stored session read-only (never takes
          * write ownership), read the header + a small event prefix, then close. */
@@ -107,14 +106,14 @@ export interface Config {
     reconnectMaxAttempts: number;
     botQQ: string;
     requireMention: boolean;
-    /** Unknown slash-command handling: intercept（默认）=拦截并给建议；passthrough=透传给模型。 */
-    unknownCommand: 'intercept' | 'passthrough';
-    /** T2 (P1): 任务运行中的新消息处理策略：queue=排队（默认）；steer=插话进当前任务。 */
-    newMessagePolicy: 'queue' | 'steer';
-    /** T9-B (用户裁决 2026-10-12)：steer 模式下自动插话资格：admin=仅管理员（默认）；all=不限。 */
-    autoSteerPolicy: 'admin' | 'all';
-    /** T3 (P2): 等待模型回复超时阈值（毫秒）——超时后登记补发跟踪、回合完成后向原聊天补发最终文字；0=关闭。 */
-    deferredTimeoutMs: number;
+    /** 插话开关：开=任务运行中的新消息作为补充指令插进当前回合。 */
+    steerEnabled: boolean;
+    /** 插话资格：开=所有成员都能插话；关（默认）=仅管理员。 */
+    steerAllMembers: boolean;
+    /** 受限成员插话：开（默认）=群内非管理员的成员也能插话；关=受限成员始终排队。 */
+    steerAllowRestricted: boolean;
+    /** 插话提示：开（默认）=插话成功回一句提交提示；关=静默插话。 */
+    steerNotice: boolean;
     dmPolicy: 'open' | 'allowlist' | 'disabled';
     groupPolicy: 'open' | 'allowlist' | 'disabled';
     allowFrom: string[];
@@ -122,55 +121,42 @@ export interface Config {
     adminUsers: string[];
     allowAllUsers: boolean;
     ignoreSelf: boolean;
-    interimMessages: boolean;
-    /** Per-interim auto-recall delay (ms) from each interim's send completion. */
-    interimRecallMs: number;
-    /** M3-D2b: interim recall degrade switch (false = send-only interims). */
-    interimRecall: boolean;
     sendErrorNotice: boolean;
-    /** Per-chat per-minute sliding-window cap for normal (non-command) messages; 0 disables. */
-    rateLimitPerMinute: number;
+    outboundIntervalBaseMs: number;
+    outboundIntervalPerCharMs: number;
+    outboundIntervalJitterPct: number;
+    /** 每次 @ 注入的记录总条数（含触发消息）；0 = 只注入触发消息。 */
+    recentMessages: number;
+    sleepMode: 'window' | 'peak';
+    sleepStart: string;
+    sleepEnd: string;
     restrictedMemberPrefix: boolean;
-    sensitivePatterns: string[];
+    /** 私聊附加提示词：人设、背景、语言风格等，原样注入系统提示词；留空不注入。 */
+    extraPromptPrivate: string;
+    /** 群聊附加提示词：人设、背景、语言风格等，原样注入系统提示词；留空不注入。 */
+    extraPromptGroup: string;
     mediaDir: string;
     tempTtlHours: number;
     outboundImageMaxBytes: number;
     maxVoiceBytes: number;
     maxFileBytes: number;
     inboundImageMaxPx: number;
-    /** @deprecated D4a alias of inboundImageMaxPx; honored for one release. */
-    imageMaxSize?: number;
-    /** @deprecated D4a alias of outboundImageMaxBytes; honored for one release. */
-    maxImageBytes?: number;
     sttEnabled: boolean;
     sttEngine: 'auto' | 'openai' | 'whisper-cpp' | 'custom';
     sttCommand: string;
     sttArgs: string[];
     sttModel: string;
     sttTimeoutMs: number;
-    textImageThreshold: number;
-    cardFooter: string;
-    fontFiles: string[];
-    fontFamilies: string[];
     agentPreset: string;
     workspacePath: string;
     inboundFileMaxBytes: number;
-    /** @deprecated D4a alias of inboundFileMaxBytes; honored for one release. */
-    maxInboundFileBytes?: number;
     /** B8c: chats idle longer than this many days are evicted (0 disables). */
     chatIdleEvictDays: number;
     /** Escape hatch: skip the download private-address check (local reverse proxy). */
     allowPrivateHosts: boolean;
     /** W2-②: inbound (chatId, message_id) dedup window in seconds; 0 disables. */
     dedupWindowSeconds: number;
-    /** W2-③: bridge-wide proactive-write (qq_send_* tools) cap per minute; 0 disables. */
-    actionRatePerMinute: number;
-    /** W2-③: bridge-wide proactive-write cap per calendar day; 0 disables. */
-    actionRatePerDay: number;
-    /** W2-③: proactive-write audit jsonl (mediaDir/qq-actions.log). */
-    actionAuditEnabled: boolean;
-    /** W1: decision-trace jsonl (mediaDir/qq-trace.jsonl); default off — zero
-     * file, zero behavior difference vs 0.6.0. */
+    /** W1: decision-trace jsonl (mediaDir/qq-trace.jsonl); default off. */
     traceEnabled: boolean;
     /** W1: trace level; 'warn' records only ok:false (rejected/failed/dropped) events. */
     traceLevel: 'debug' | 'warn';
@@ -192,11 +178,6 @@ export declare function defaultMediaDir(): string;
 /** The dsh data home ($DSH_HOME or ~/.dsh); source of the .agent-presets dir. */
 export declare function dshHome(): string;
 export declare const Config: Z<Config>;
-/** Map deprecated config names onto their renamed fields: a legacy value is
- * honored only while the new name still sits at its schema default (the new
- * name wins when both are configured), each legacy use warns once, and the
- * legacy keys never leak into the effective config. */
-export declare function resolveDeprecatedConfig(config: Config): Config;
 /** Log a meta event; periodic heartbeat events are silenced to keep the log readable. */
 export declare function logMetaEvent(selfId: string, event: OneBotEvent, minLevel?: Config['logLevel']): void;
 /** Mount the plugin. */

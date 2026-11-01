@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
 
 import { defaultMediaDir, dshHome } from '../src/index.js'
-import { ChatRegistry } from '../src/registry.js'
+import { ChatRegistry } from '../src/registry/index.js'
 
 // Regression tests for the 0.4.3 hotfix pair that pure fakes cannot cover:
 // the dsh-home fallback chain (defect 1) and the retired-sessions save race

@@ -12,8 +12,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
-import { newTraceId, TRACE_REASONS, TRACE_STAGES, TraceSink } from '../src/trace.js'
-import type { TraceEvent } from '../src/trace.js'
+import { newTraceId, TRACE_REASONS, TRACE_STAGES, TraceSink } from '../src/ops/trace.js'
+import type { TraceEvent } from '../src/ops/trace.js'
 
 import { disconnect, inboundAndDisconnect, makeEvent, makeHarness, reconnect } from './helpers/bridge-harness.js'
 
@@ -161,9 +161,7 @@ describe('traceId propagation through the bridge (traceEnabled on)', () => {
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
     const session = { id: h.sessionIds[0] }
     h.ctx.emit('session/event', session as never, makeEvent('turn/start', { turn: 1 }))
-    h.ctx.emit('session/event', session as never, makeEvent('assistant/message', {
-      turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: '最终回复' }] },
-    }))
+    await h.say('最终回复')
     h.ctx.emit('session/event', session as never, makeEvent('turn/end', { turn: 1, reason: { kind: 'completed' } }))
     await vi.waitFor(() => {
       expect(h.outbound.some(f => f.action === 'send_msg' && JSON.stringify(f.params).includes('最终回复'))).toBe(true)
@@ -196,9 +194,7 @@ describe('traceId propagation through the bridge (traceEnabled on)', () => {
     h.sendText('你好')
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
     const session = { id: h.sessionIds[0] }
-    h.ctx.emit('session/event', session as never, makeEvent('assistant/message', {
-      turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: '最终答案' }] },
-    }))
+    await h.say('最终答案')
     h.ctx.emit('session/event', session as never, makeEvent('turn/end', { turn: 1, reason: { kind: 'completed' } }))
     // The settle loop parks the final after turn/end; wait until it reached QQ.
     await vi.waitFor(() => {
@@ -239,7 +235,7 @@ describe('traceId propagation through the bridge (traceEnabled on)', () => {
   it('every ok:false event in a live round carries a non-empty Chinese reason', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'onebot-trace-'))
     const sink = new TraceSink({ dir, log: () => undefined })
-    const h = await makeHarness({ trace: sink, textImageThreshold: 0 })
+    const h = await makeHarness({ trace: sink })
     // Whitelisted user, but the message expands to no effective content and
     // the round still runs: drive one full round + a mention-less group drop.
     h.sendText('你好')
@@ -273,9 +269,7 @@ describe('traceEnabled default off (zero difference)', () => {
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
     const session = { id: h.sessionIds[0] }
     h.ctx.emit('session/event', session as never, makeEvent('turn/start', { turn: 1 }))
-    h.ctx.emit('session/event', session as never, makeEvent('assistant/message', {
-      turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: '回复' }] },
-    }))
+    await h.say('回复')
     h.ctx.emit('session/event', session as never, makeEvent('turn/end', { turn: 1, reason: { kind: 'completed' } }))
     await vi.waitFor(() => {
       expect(h.outbound.some(f => f.action === 'send_msg' && JSON.stringify(f.params).includes('回复'))).toBe(true)
@@ -300,9 +294,6 @@ describe('offline queue + proactive write trace events', () => {
     h.ctx.emit('session/event', session as never, makeEvent('turn/end', { turn: 1, reason: { kind: 'completed' } }))
     // A queuable send while disconnected parks with a trace event (was silent).
     await expect(h.bridge.sendToChat('private:10001', '排队回复', { queuable: true })).resolves.toEqual([])
-    // A proactive write while disconnected fails and is traced with a reason.
-    await expect(h.bridge.sendSegments('private:10001', [{ type: 'text', data: { text: '主动写' } }]))
-      .rejects.toThrow()
     const { client: client2, outbound: outbound2 } = await reconnect(h)
     await vi.waitFor(() => {
       expect(outbound2.some(f => f.action === 'send_msg' && JSON.stringify(f.params).includes('排队回复'))).toBe(true)
@@ -313,9 +304,6 @@ describe('offline queue + proactive write trace events', () => {
     const parked = lines.find(event => event.stage === 'queue' && event.reason === TRACE_REASONS.outboundQueued)
     expect(parked).toBeDefined()
     expect(parked!.ok).toBe(true)
-    const proactive = lines.find(event => event.stage === 'outbound' && event.ok === false && event.reason!.match(CJK))
-    expect(proactive).toBeDefined()
-    expect(proactive!.traceId).toMatch(/^t-/)
     await h.bridge.stop()
     await h.connection.stop()
   }, 30_000)

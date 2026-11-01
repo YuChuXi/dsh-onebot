@@ -9,9 +9,9 @@
  * 循环与真实宿主 v4 准入函数上断言 kind 不漂移：
  *
  * 1. 普通入站 dispatch —— 唯一插件会话行（user/message）携带 producer-owned kind；
- * 2. interim 开启的回合 —— 回合全程零新增插件写入，dispatch 行 kind 不变；
+ * 2. 工具发言的回合 —— 回合全程零新增插件写入，dispatch 行 kind 不变；
  * 3. steer 补递（语音转写）—— 第二写点同 kind；
- * 4. 宿主转发命令（/permission、/plan）—— 插件侧零会话写入（行归宿主管辖）；
+ * 4. 宿主转发命令（/compact）—— 插件侧零会话写入（行归宿主管辖）；
  * 5. JSONL 序列化-重读-再写入循环 + 宿主 assertV4RowAdmission 正反例
  *    （retired `kind: 'plugin'` 必须被拒；`plugin:dsh-onebot` 必须通过）；
  * 6. src 全树扫描不变量 —— 任何新的 `source: { … kind … }` 写入形态必须携带
@@ -26,10 +26,10 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import WebSocket from 'ws'
 
-import { OneBotConnection } from '../src/connection.js'
-import { ChatBridge } from '../src/bridge.js'
-import { MediaStore } from '../src/media.js'
-import { Transcriber } from '../src/stt.js'
+import { OneBotConnection } from '../src/onebot/connection.js'
+import { ChatBridge } from '../src/bridge/index.js'
+import { MediaStore } from '../src/media/store.js'
+import { Transcriber } from '../src/media/stt.js'
 
 /** 插件写入的会话行消息（dsh-llm createMessage 形态：id/role/content/source 冻结体）。 */
 interface CapturedMessage {
@@ -47,6 +47,8 @@ const RETIRED_KIND = 'plugin'
 function makeRecordingAgents() {
   const captured: Array<{ via: 'followup' | 'steer'; message: CapturedMessage }> = []
   const sessionIds: string[] = []
+  /** 注册到会话作用域的工具（测试可像模型一样调用它们发言）。 */
+  const tools: Array<{ name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }> = []
   const makeAgent = (sessionId: string) => ({
     session: { id: sessionId, seq: 0, header: { cwd: process.cwd() } },
     status: 'idle',
@@ -63,23 +65,26 @@ function makeRecordingAgents() {
       const fresh = makeAgent(sessionId)
       Object.assign(agent, fresh)
       if (typeof options.setup === 'function') {
-        await options.setup({ on: () => () => undefined, systemPrompt: { section: () => () => undefined }, tools: { register: () => () => undefined } })
+        await options.setup({
+          on: () => () => undefined,
+          systemPrompt: { section: () => () => undefined },
+          tools: { register: (tool: { name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }) => { tools.push(tool) } },
+        })
       }
       return { agent, dispose: vi.fn(async () => undefined) }
     }),
     resume: vi.fn(async () => { throw new Error('not persisted') }),
   }
-  return { agents, captured, sessionIds }
+  return { agents, captured, sessionIds, tools }
 }
 
 /** 真管线 harness：真实 ChatBridge + 反向 WS，镜像 tests/helpers/bridge-harness.ts
  * 的 makeHarness，仅替换 agent 记录层为全对象捕获。 */
 async function makeV4Harness(opts?: {
-  interimMessages?: boolean
   commands?: { execute: (agent: unknown, line: string, attachments: readonly unknown[], signal: AbortSignal) => Promise<{ kind?: string; text?: string; result?: { kind?: string; text?: string } }> }
 }) {
   const ctx = new Context()
-  const { agents, captured, sessionIds } = makeRecordingAgents()
+  const { agents, captured, sessionIds, tools } = makeRecordingAgents()
   const sessions = { flush: vi.fn(async () => undefined) }
   const mediaDir = mkdtempSync(join(tmpdir(), 'onebot-v4-test-'))
   const connection = new OneBotConnection({
@@ -96,10 +101,9 @@ async function makeV4Harness(opts?: {
     defaultModel: undefined,
     config: {
       botQQ: '10002', ignoreSelf: false, requireMention: true,
-      interimMessages: opts?.interimMessages ?? true, sendErrorNotice: true, restrictedMemberPrefix: false,
-      sensitivePatterns: [], mediaDir, maxImageBytes: 8 * 1024 * 1024,
+      sendErrorNotice: true, restrictedMemberPrefix: false,
+      mediaDir, maxImageBytes: 8 * 1024 * 1024,
       maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
-      textImageThreshold: 0, cardFooter: 'dsh', fontFiles: [], fontFamilies: [],
       agentPreset: 'standard', workspacePath: mediaDir,
     },
     policy: {
@@ -130,7 +134,16 @@ async function makeV4Harness(opts?: {
       sender: { user_id: 10001, nickname: '小明' },
     }))
   }
-  return { ctx, bridge, connection, client, outbound, sendText, captured, sessionIds, mediaDir }
+  /** 像模型一样发言：调用会话作用域里的 qq_send_message（回合最终文本不会自动发送）。 */
+  const say = (text: string): Promise<unknown> => {
+    const tool = tools.find(item => item.name === 'qq_send_message')
+    if (tool === undefined) throw new Error('qq_send_message 未注册')
+    return tool.execute({ text }, {
+      agent: { session: { id: sessionIds[0] } },
+      concludeTurn: () => undefined,
+    })
+  }
+  return { ctx, bridge, connection, client, outbound, sendText, captured, sessionIds, mediaDir, say }
 }
 
 /** 逐用例收尾：断开 WS、停桥、停连接（对齐既有 spec 的清理纪律）。 */
@@ -167,29 +180,22 @@ describe('session v4 producer-owned source kind（持久化回归）', () => {
     } finally { await stopHarness(h) }
   })
 
-  it('② interim 开启的回合：全程零新增插件写入，dispatch 行 kind 不漂移', async () => {
-    const h = await makeV4Harness({ interimMessages: true })
+  it('② 一个完整回合：模型经工具发言，插件侧零新增会话写入', async () => {
+    const h = await makeV4Harness()
     try {
       h.sendText('跑个长任务')
       await vi.waitFor(() => expect(h.captured).toHaveLength(1))
       const dispatchRow = h.captured[0].message
       expect(dispatchRow.source).toEqual({ kind: PLUGIN_KIND })
 
-      // 驱动一个真实回合：turn/start → assistant 中间消息（loop-merge 模式下首段
-      // 文本被 deferred，与最终回复一起在 turn/end 结算出站）→ turn/end
       const session = { id: h.sessionIds[0] }
       h.ctx.emit('session/event', session as never, makeEvent('turn/start', { turn: 1 }))
-      h.ctx.emit('session/event', session as never, makeEvent('assistant/message', {
-        turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: '中间步骤' }] },
-      }))
-      h.ctx.emit('session/event', session as never, makeEvent('assistant/message', {
-        turn: 1, step: 2, message: { role: 'assistant', content: [{ type: 'text', text: '最终答案' }] },
-      }))
+      await h.say('最终答案')
       h.ctx.emit('session/event', session as never, makeEvent('turn/end', { turn: 1, reason: { kind: 'completed' } }))
       await vi.waitFor(() => {
         expect(h.outbound.some(f => f.action === 'send_msg' && JSON.stringify(f.params).includes('最终答案'))).toBe(true)
       })
-      // interim 只消费会话事件（出站路径），不产生任何新会话行：
+      // 工具发言走 outbound，不产生任何新会话行。
       expect(h.captured).toHaveLength(1)
       expect(h.captured[0].message.source).toEqual({ kind: PLUGIN_KIND })
     } finally { await stopHarness(h) }
@@ -215,11 +221,11 @@ describe('session v4 producer-owned source kind（持久化回归）', () => {
     } finally { await stopHarness(h) }
   })
 
-  it('④ 宿主转发命令（/permission、/plan）：插件侧零会话写入', async () => {
+  it('④ 宿主转发命令（/compact）：插件侧零会话写入', async () => {
     const execute = vi.fn(async (_agent: unknown, line: string, attachments: readonly unknown[], signal: AbortSignal) => {
       expect(Array.isArray(attachments)).toBe(true)
       expect(signal.aborted).toBe(false)
-      return { commandId: 'cmd-host', result: { kind: 'success', text: 'current preset: workspace-write\n(available: workspace-write, danger-full-access)' } }
+      return { commandId: 'cmd-host', result: { kind: 'success', text: '已压缩 12 条历史' } }
     })
     const h = await makeV4Harness({ commands: { execute } })
     try {
@@ -227,13 +233,11 @@ describe('session v4 producer-owned source kind（持久化回归）', () => {
       await vi.waitFor(() => expect(h.captured).toHaveLength(1))
       h.captured.length = 0 // 只观测命令路径
 
-      h.sendText('/permission')
-      await vi.waitFor(() => expect(execute).toHaveBeenCalledWith(expect.anything(), '/permission', expect.anything(), expect.anything()))
+      h.sendText('/compact')
+      await vi.waitFor(() => expect(execute).toHaveBeenCalledWith(expect.anything(), '/compact', expect.anything(), expect.anything()))
       await vi.waitFor(() => {
-        expect(h.outbound.some(f => f.action === 'send_msg')).toBe(true)
+        expect(h.outbound.some(f => f.action === 'send_msg' && JSON.stringify(f.params).includes('已压缩 12 条历史'))).toBe(true)
       })
-      h.sendText('/plan off')
-      await vi.waitFor(() => expect(execute).toHaveBeenCalledWith(expect.anything(), '/plan off', expect.anything(), expect.anything()))
       // 宿主转发路径：commands.execute(chat.agent, …) 由宿主命令运行时写行（宿主自有
       // source）；插件侧 followup/steer 均未被触发 —— 零插件会话写入。
       expect(h.captured).toHaveLength(0)
@@ -297,19 +301,18 @@ describe('session v4 producer-owned source kind（持久化回归）', () => {
     for (const file of files) {
       const text = await readFile(file, 'utf8')
       text.split('\n').forEach((line, index) => {
-        if (/source:\s*\{/.test(line) && /kind/.test(line)) {
-          matches.push({ file: file.split(/[\\/]/).pop() ?? file, line: index + 1, text: line.trim() })
+        if (/source:\s*\{\s*kind:/.test(line)) {
+          matches.push({ file, line: index + 1, text: line.trim() })
         }
       })
     }
-    // 恰为审计收口的两处写入点（bridge.ts:576/754，T9-C 行号同步），且全部携带 producer-owned kind
+    // 会话写入点只有 bridge/index.ts 的两处（dispatchFollowup 与 steerMessage），
+    // 且全部携带 producer-owned kind。
     expect(matches.length).toBeGreaterThanOrEqual(2)
     for (const m of matches) {
-      expect(m.file === 'bridge.ts' || m.file === 'commands.ts' || m.file === 'trace.ts' || m.file === 'record.ts' || m.file === 'measure.ts',
+      expect(m.file.endsWith(join('bridge', 'index.ts')),
         '意外的会话 source 写入形态：' + m.file + ':' + m.line + ' → ' + m.text).toBe(true)
-      if (m.file === 'bridge.ts') {
-        expect(m.text, m.file + ':' + m.line).toContain(PLUGIN_KIND)
-      }
+      expect(m.text, m.file + ':' + m.line).toContain(PLUGIN_KIND)
     }
   })
 })

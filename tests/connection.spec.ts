@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import WebSocket, { WebSocketServer } from 'ws'
-import { OneBotConnection } from '../src/connection.js'
-import type { OneBotEvent } from '../src/connection.js'
+import { OneBotConnection } from '../src/onebot/connection.js'
+import type { OneBotEvent } from '../src/onebot/connection.js'
 import { Config, logMetaEvent } from '../src/index.js'
 
 const CONFIG = {

@@ -10,7 +10,7 @@ import { chmod, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { findCommand } from '../src/stt.js'
+import { findCommand } from '../src/media/stt.js'
 
 afterEach(() => {
   vi.unstubAllEnvs()

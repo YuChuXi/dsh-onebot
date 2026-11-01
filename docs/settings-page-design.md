@@ -85,7 +85,7 @@
   但它只允许写 **volatile 字段**（`dsh-settings/lib/index.js:502-513` 的
   `isVolatilePath` 门禁），且 dsh-onebot 当前 Config 无任何 volatile 字段
   （src/index.ts:171-268 无 `.volatile()`），运行时也以 apply 期快照方式消费 config
-  （src/index.ts:319-356，`resolveDeprecatedConfig` 拷贝 + 构造期闭包捕获）。
+  （src/index.ts，apply 期快照 + 构造期闭包捕获）。
 
 ---
 
@@ -115,7 +115,7 @@
 2. **热生效边界清晰**：变更以「插件 fiber 秒级原地重启」落地（§1.2 #1），
    宿主进程不重启；QQ 桥短暂断开由 NapCat ws-reverse 自动重拨补齐
    （dsh-onebot B5 重连实现，DEVLOG.md:144）。
-3. **单一代价、明确可见**：每次保存触发一次插件重启（内存态如频控窗口清零、
+3. **单一代价、明确可见**：每次保存触发一次插件重启（内存态如入站去重窗口清空、
    在途回合中断）——见 §5 矩阵，写入文档与 UI 提示。
 4. **写入自带安全网**：原子写、文件锁、hmr 串行、失败自动回滚 patch 并还原
    （dsh-config-editor/lib/index.js:63-123）。
@@ -171,7 +171,7 @@
 | 文件 | `<DSH_HOME>/profiles/web/cordis.patch.yml`（`DSH_HOME` 解析：`DSH_HOME` 环境变量优先，否则 `~/.dsh`；dsh-home-paths/lib/index.js:73-81。本机实际 `/vol2/@appshare/Harness/.dsh/profiles/web/cordis.patch.yml`） |
 | 行形态 | `-{ id: dsh-onebot, name: <绝对路径 file URL/路径>, config: { … } }` |
 | 覆盖语义 | config **整键替换**、后层胜前层（applyEntryPatches `target[key]=value`，cordis-plugin-include/lib/index.js:104-107；dsh-base/cordis.patch.yml:4-6 头注释同义）。Remote 写入时按 configEditor.edit 的 `(raw, inherited)` 语义维护**唯一权威覆盖行**：`next = mergeLayers(当前覆盖行快照, 本次改动)`，等价 inherited 时整行删除（dsh-config-editor/lib/index.js:86-104） |
-| UI 键集 | 仅 §4 三组 19 键；media/STT/性能等低频键**不设 UI**，仍在同一行 config 手改（README/宿主原生 patch 编辑器），单一来源、无第二优先级 |
+| UI 键集 | 仅 §4 四组 33 键；media/STT/性能等低频键**不设 UI**，仍在同一行 config 手改（README/宿主原生 patch 编辑器），单一来源、无第二优先级 |
 | 合并优先级（一句话） | **schema 默认值 ← bundle/底层 patch（继承层） ← profile 覆盖行（设置页写这里）**；同一层内后写的 patch 条目胜出。设置页键与手改 patch 是同一层的同一行，不存在两套优先级 |
 | 敏感字段 | `accessToken` 保持 `role('secret')`（src/index.ts:178）：快照返回侧脱敏（值置空 + `secrets` 标记，脱敏算法对齐 dsh-settings `redactSecrets`，dsh-settings/lib/index.js:74-100）；写入侧 patch 文件明文落盘（宿主既有管道默认行为，加密存储范围外） |
 
@@ -181,16 +181,20 @@
 OnebotSettingsSnapshot {
   revision: number              // §3.1 乐观锁
   entryActive: boolean          // dsh-onebot 条目 fiber 是否 active
-  config: object                // 19 键生效值；accessToken 脱敏为 ""
+  config: object                // 33 键生效值；accessToken 脱敏为 ""
   secrets: [{ path: ["accessToken"], set: boolean }]
   groups: {
-    connection:  ["mode","host","port","url","accessToken","botQQ"],
+    connection:  ["mode","host","port","url","accessToken","botQQ","workspacePath"],
     permissions: ["requireMention","adminUsers","dmPolicy","groupPolicy",
                   "allowAllUsers","allowFrom","groupAllowFrom"],
-    behavior:    ["interimMessages","interimRecall","interimRecallMs",
-                  "sendErrorNotice","unknownCommand","rateLimitPerMinute"]
+    behavior:    ["sendErrorNotice","outboundIntervalBaseMs","outboundIntervalPerCharMs",
+                  "outboundIntervalJitterPct","recentMessages","steerEnabled",
+                  "steerAllMembers","steerAllowRestricted","steerNotice",
+                  "sleepMode","sleepStart","sleepEnd",
+                  "extraPromptPrivate","extraPromptGroup"],
+    diagnostics: ["traceEnabled","recordInbound","inboxRedact","injectEnabled","injectDryRun"]
   }
-  effect: "restart"             // 本设计下 19 键统一为插件级热重启（§5）
+  effect: "restart"             // 本设计下 33 键统一为插件级热重启（§5）
 }
 ```
 
@@ -223,17 +227,18 @@ OnebotSettingsSnapshot {
 | 方法（descriptor 顺序） | 参数（positional） | 返回 | 语义 |
 |---|---|---|---|
 | `getSettings()` | — | `OnebotSettingsSnapshot` | 读快照：revision + 脱敏生效配置 + 分组 + 条目活性 |
-| `updateSettings(patch, expectedRevision)` | `patch: object`（§3 groups 中 19 键的任意子集，扁平 JSON）；`expectedRevision: number\|undefined` | `OnebotSettingsSnapshot` | 合并写：`next = mergeLayers(当前覆盖行, patch)`；`accessToken` 缺省=不改，`""`=清空；锁冲突抛 `onebot-settings/conflict`；成功后热生效（§5）并返回新快照 |
+| `updateSettings(patch, expectedRevision)` | `patch: object`（§3 groups 中 33 键的任意子集，扁平 JSON）；`expectedRevision: number\|undefined` | `OnebotSettingsSnapshot` | 合并写：`next = mergeLayers(当前覆盖行, patch)`；`accessToken` 缺省=不改，`""`=清空；锁冲突抛 `onebot-settings/conflict`；成功后热生效（§5）并返回新快照 |
 
 - 不设 `resetGroup`/`mutate(ops)`：组内重置=UI 以 schema 默认值显式下发
   （默认值表见下），路径级 ops 是宿主原生页的需求，本 UI 用不上（YAGNI）。
-- 三组键、类型与 schema 默认值（T4 渲染与重置的唯一来源；摘自 src/index.ts:171-268）：
+- 四组键、类型与 schema 默认值（T4 渲染与重置的唯一来源；摘自 src/index.ts 的 Config schema）：
 
   | 组 | 键：类型 = 默认 |
   |---|---|
-  | connection | `mode: 'reverse'\|'forward' = 'reverse'`；`host: string = '127.0.0.1'`；`port: number = 8643`；`url: string = 'ws://127.0.0.1:3001'`；`accessToken: string(secret) = ''`；`botQQ: string = ''` |
+  | connection | `mode: 'reverse'\|'forward' = 'reverse'`；`host: string = '127.0.0.1'`；`port: number = 8643`；`url: string = 'ws://127.0.0.1:3001'`；`accessToken: string(secret) = ''`；`botQQ: string = ''`；`workspacePath: string = ''`（留空 = 宿主进程工作目录） |
   | permissions | `requireMention: boolean = true`；`adminUsers: string[] = []`；`dmPolicy: 'open'\|'allowlist'\|'disabled' = 'open'`；`groupPolicy: 'open'\|'allowlist'\|'disabled' = 'open'`；`allowAllUsers: boolean = false`；`allowFrom: string[] = []`；`groupAllowFrom: string[] = []` |
-  | behavior | `interimMessages: boolean = true`；`interimRecall: boolean = true`；`interimRecallMs: number = 90000`；`sendErrorNotice: boolean = true`；`unknownCommand: 'intercept'\|'passthrough' = 'intercept'`；`rateLimitPerMinute: number = 30` |
+  | behavior | `sendErrorNotice: boolean = true`；`outboundIntervalBaseMs: number = 300`；`outboundIntervalPerCharMs: number = 60`；`outboundIntervalJitterPct: number = 30`；`recentMessages: number = 50`（范围 0–100）；`steerEnabled: boolean = false`；`steerAllMembers: boolean = false`；`steerAllowRestricted: boolean = true`；`steerNotice: boolean = true`；`sleepMode: 'window'\|'peak' = 'window'`；`sleepStart: string = ''`；`sleepEnd: string = ''`；`extraPromptPrivate: text = ''`；`extraPromptGroup: text = ''`（多行自由文本，原样注入对应会话的系统提示词） |
+  | diagnostics | `traceEnabled: boolean = false`；`recordInbound: boolean = false`；`inboxRedact: boolean = false`；`injectEnabled: boolean = false`；`injectDryRun: boolean = true` |
 
 - 客户端侧（T4）照抄 dsh-expert-orchestrator/lib/client.js 模式：CJS 包裹
   `window.__ModuleLoader__.load({id, factory:(require)=>{…}})`（:47）、
@@ -244,21 +249,20 @@ OnebotSettingsSnapshot {
 
 ## 5. 热生效 / 需重启边界矩阵（T5 文档措辞以此为准）
 
-dsh-onebot 当前以 **apply 期快照**方式消费 config（src/index.ts:319-356：
-`resolveDeprecatedConfig` 拷贝 + OneBotConnection/Transcriber 构造参数捕获），
-无 volatile 字段，运行中不重读引用。因此定案：
+dsh-onebot 当前以 **apply 期快照**方式消费 config（OneBotConnection/Transcriber
+构造参数捕获），无 volatile 字段，运行中不重读引用。因此定案：
 
 | 变更 | 生效方式 | 生效时长 | 依据 |
 |---|---|---|---|
-| 设置页/手改 patch 改 **19 键中任意键**（含 connection 组） | **插件 fiber 原地热重启**（partial-dispose → 新 config 重新 init），宿主进程与 Web GUI 不重启 | 秒级；reverse 监听端口短暂重开、forward 重拨，NapCat 侧自动重连 | cordis-plugin-loader/lib/index.js:380-388；dsh-onebot B5 重连（DEVLOG.md:144） |
+| 设置页/手改 patch 改 **33 键中任意键**（含 connection 组） | **插件 fiber 原地热重启**（partial-dispose → 新 config 重新 init），宿主进程与 Web GUI 不重启 | 秒级；reverse 监听端口短暂重开、forward 重拨，NapCat 侧自动重连 | cordis-plugin-loader/lib/index.js:380-388；dsh-onebot B5 重连（DEVLOG.md:144） |
 | 同一次写入仅含 schema 默认值无差异（no-op） | 不触发重启，revision 不变 | — | dsh-settings/lib/index.js:455 no-op 不递增；EntryGroup.update 等值不差分 |
 | 写入导致插件激活失败（校验拒绝/依赖缺失） | patch 文件自动回滚到写前内容并 reconcile 还原，**旧配置继续运行** | — | dsh-config-editor/lib/index.js:118-123 |
-| 19 键之外的键（media/STT/性能/agentPreset 等） | 手改同一覆盖行后同样热重启生效；或宿主原生 patch 编辑器改（同一管道） | 秒级 | §3 持久层同源；dsh-config-editor/lib/index.js:63-123 |
-| 改 `lib/index.js`（插件代码） | 不在本设计范围；本设计的 19 键均不需要改代码 | — | 现网实测记录：HMR 只重应用配置快照、不重新 require 插件 JS（DEVLOG.md:94） |
+| 33 键之外的键（media/STT/性能/agentPreset 等） | 手改同一覆盖行后同样热重启生效；或宿主原生 patch 编辑器改（同一管道） | 秒级 | §3 持久层同源；dsh-config-editor/lib/index.js:63-123 |
+| 改 `lib/index.js`（插件代码） | 不在本设计范围；本设计的 33 键均不需要改代码 | — | 现网实测记录：HMR 只重应用配置快照、不重新 require 插件 JS（DEVLOG.md:94） |
 | 改 profile 根配置 `cordis.yml` / bundle 自带 patch | 不热生效（§1.2 #5/#6）——本设计的读写全部绕开这两处 | — | dsh-hmr/lib/index.js:354 |
 
-**给用户的代价说明（写入 T5）**：每次保存设置 = QQ 桥一次秒级重连；在途回合中断、
-频控窗口与中间消息缓冲清零；会话映射/历史不受影响（会话持久化已覆盖重启场景）。
+**给用户的代价说明（写入 T5）**：每次保存设置 = QQ 桥一次秒级重连；在途模型回合中断，
+进程内入站去重窗口清空；会话映射与历史不受影响（会话持久化已覆盖重启场景）。
 
 **后续演进路径（非本轮，无未决项）**：若要「权限/行为组免重启热生效」，需两步——
 ① Config schema 对相应字段加 `.volatile()`（schemastery，schemastery/src/index.ts:480-482）；
