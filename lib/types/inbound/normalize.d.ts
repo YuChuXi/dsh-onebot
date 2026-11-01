@@ -6,6 +6,7 @@ import type { OneBotEvent } from '../onebot/connection.js';
 import type { IncomingSegment } from '../onebot/segments.js';
 import type { ChatId } from '../chat/index.js';
 import type { NoticeRecord } from '../onebot/records.js';
+import type { NameResolver } from './notice.js';
 /** 一条 OneBot 消息对象里管线会读的字段（实现之间略有出入）。 */
 export interface RawMessage {
     user_id?: string | number;
@@ -71,11 +72,12 @@ export declare function normalizeOneBot11(event: OneBotEvent): NormalizedInbound
  * Args:
  *   event (OneBotEvent): 原始事件。
  *   selfId (string): 机器人自身 QQ，用于判定事件是否指向机器人。
+ *   resolveName (NameResolver): QQ → 显示名；notice 专用处理器整理文案时用。
  *
  * Returns:
- *   NormalizedInbound | null: 归一化结果；不构成会话内容时为 null。
+ *   Promise<NormalizedInbound | null>: 归一化结果；不构成会话内容时为 null。
  *
  * Callers:
  *   - `src/bridge/index.ts:handleInbound`。
  */
-export declare function normalizeEvent(event: OneBotEvent, selfId: string): NormalizedInbound | null;
+export declare function normalizeEvent(event: OneBotEvent, selfId: string, resolveName: NameResolver): Promise<NormalizedInbound | null>;

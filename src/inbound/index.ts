@@ -31,7 +31,7 @@ import type { BridgeConfig } from '../bridge/config.js'
 import type { ChatSettings } from '../registry/index.js'
 import { describeError } from '../shared/errors.js'
 import { formatClock } from '../shared/clock.js'
-import { normalizeOneBot11 } from './normalize.js'
+import { normalizeEvent } from './normalize.js'
 import type { NormalizedInbound, RawMessage } from './normalize.js'
 import { dormancyKey, sleepingNow } from './sleep.js'
 import { currentTrace, TRACE_REASONS } from '../ops/trace.js'
@@ -133,6 +133,53 @@ export class InboundPipeline {
   /** 健康快照：去重窗口当前持有的 message_id 数量。 */
   get dedupWindowEntries(): number {
     return this.seenMessages.size
+  }
+
+  /**
+   * 把一条原始 OneBot 事件归一化成中性入站事件。形状收缩是纯函数的事；
+   * notice 文案要用的显示名在这里取（群成员表 / 陌生人信息），因为取名属于
+   * 入站管线的 I/O。
+   *
+   * Args:
+   *   event (OneBotEvent): 连接层送来的原始事件。
+   *
+   * Returns:
+   *   Promise<NormalizedInbound | null>: 归一化结果；不构成会话内容时为 null。
+   *
+   * Callers:
+   *   - `src/bridge/index.ts:handleInbound`。
+   */
+  async normalize(event: OneBotEvent): Promise<NormalizedInbound | null> {
+    const selfId = this.ctx.selfId() || this.ctx.config.botQQ
+    return await normalizeEvent(event, selfId, (qq, groupId) => this.qqName(qq, groupId))
+  }
+
+  /**
+   * QQ 号 → 显示名：群事件读群成员表（按群缓存），私聊事件查陌生人信息。
+   * 取不到时返回空串，由调用方决定展示什么。
+   *
+   * Args:
+   *   qq (string): 要取名的 QQ 号。
+   *   groupId (string): 事件所属群；私聊为 ''。
+   *
+   * Returns:
+   *   Promise<string>: 显示名；查不到时 ''。
+   *
+   * Callers:
+   *   - `normalize`（notice 专用处理器的取名回调）。
+   */
+  private async qqName(qq: string, groupId: string): Promise<string> {
+    if (qq === '') return ''
+    if (groupId !== '') return (await this.memberNames(groupId)).get(qq) ?? ''
+    const userId = Number(qq)
+    if (!Number.isSafeInteger(userId) || userId <= 0) return ''
+    try {
+      const info = await this.ctx.call('get_stranger_info', { user_id: userId }) as { nickname?: unknown } | undefined
+      return typeof info?.nickname === 'string' ? info.nickname : ''
+    } catch (error) {
+      this.ctx.log('debug', 'get_stranger_info failed for ' + qq + ': ' + describeError(error))
+      return ''
+    }
   }
 
   /**

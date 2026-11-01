@@ -9,6 +9,7 @@ import type { IncomingSegment } from '../onebot/segments.js'
 import type { ChatId } from '../chat/index.js'
 import { buildChatId, displayName } from '../chat/index.js'
 import type { NoticeRecord } from '../onebot/records.js'
+import type { NameResolver } from './notice.js'
 import { renderNotice } from './notice.js'
 
 /** 一条 OneBot 消息对象里管线会读的字段（实现之间略有出入）。 */
@@ -103,20 +104,25 @@ export function normalizeOneBot11(event: OneBotEvent): NormalizedInbound | null 
  * Args:
  *   event (OneBotEvent): 原始事件。
  *   selfId (string): 机器人自身 QQ，用于判定事件是否指向机器人。
+ *   resolveName (NameResolver): QQ → 显示名；notice 专用处理器整理文案时用。
  *
  * Returns:
- *   NormalizedInbound | null: 归一化结果；不构成会话内容时为 null。
+ *   Promise<NormalizedInbound | null>: 归一化结果；不构成会话内容时为 null。
  *
  * Callers:
  *   - `src/bridge/index.ts:handleInbound`。
  */
-export function normalizeEvent(event: OneBotEvent, selfId: string): NormalizedInbound | null {
+export async function normalizeEvent(
+  event: OneBotEvent,
+  selfId: string,
+  resolveName: NameResolver,
+): Promise<NormalizedInbound | null> {
   if (event.post_type === 'message' || event.message_type !== undefined) return normalizeOneBot11(event)
   if (event.post_type !== 'notice') return null
-  const rendered = renderNotice(event, selfId)
+  const rendered = await renderNotice(event, selfId, resolveName)
   if (rendered === null) return null
   const record = rendered.record
-  const groupId = String(record.group_id ?? '')
+  const groupId = String(event.group_id ?? '')
   const kind: 'private' | 'group' = groupId !== '' ? 'group' : 'private'
   const userId = String(record.user_id ?? '')
   // 私聊事件的对端是 user_id；没有对端（或对端就是机器人自己）时不属于任何会话。

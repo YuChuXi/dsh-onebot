@@ -1,3 +1,4 @@
+import type { OneBotEvent } from '../onebot/connection.js';
 import type { MediaStore } from '../media/store.js';
 import type { Transcriber } from '../media/stt.js';
 import type { AccessPolicyConfig, ChatId, UserRole } from '../chat/index.js';
@@ -86,6 +87,36 @@ export declare class InboundPipeline {
     constructor(ctx: InboundContext, options?: InboundPipelineOptions);
     /** 健康快照：去重窗口当前持有的 message_id 数量。 */
     get dedupWindowEntries(): number;
+    /**
+     * 把一条原始 OneBot 事件归一化成中性入站事件。形状收缩是纯函数的事；
+     * notice 文案要用的显示名在这里取（群成员表 / 陌生人信息），因为取名属于
+     * 入站管线的 I/O。
+     *
+     * Args:
+     *   event (OneBotEvent): 连接层送来的原始事件。
+     *
+     * Returns:
+     *   Promise<NormalizedInbound | null>: 归一化结果；不构成会话内容时为 null。
+     *
+     * Callers:
+     *   - `src/bridge/index.ts:handleInbound`。
+     */
+    normalize(event: OneBotEvent): Promise<NormalizedInbound | null>;
+    /**
+     * QQ 号 → 显示名：群事件读群成员表（按群缓存），私聊事件查陌生人信息。
+     * 取不到时返回空串，由调用方决定展示什么。
+     *
+     * Args:
+     *   qq (string): 要取名的 QQ 号。
+     *   groupId (string): 事件所属群；私聊为 ''。
+     *
+     * Returns:
+     *   Promise<string>: 显示名；查不到时 ''。
+     *
+     * Callers:
+     *   - `normalize`（notice 专用处理器的取名回调）。
+     */
+    private qqName;
     /**
      * 处理一条入站事件。
      *

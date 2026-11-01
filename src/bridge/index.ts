@@ -33,7 +33,6 @@ import type { OutboundSegment, SendOptions } from '../outbound/index.js'
 import { ChatRegistry } from '../registry/index.js'
 import type { ChatAgent } from '../registry/index.js'
 import { InboundPipeline } from '../inbound/index.js'
-import { normalizeEvent } from '../inbound/normalize.js'
 import type { NormalizedInbound } from '../inbound/normalize.js'
 import { describeError, errorStack } from '../shared/errors.js'
 import { currentTrace, newTraceId, runWithTrace, TRACE_REASONS } from '../ops/trace.js'
@@ -322,8 +321,7 @@ export class ChatBridge {
    * events are never recorded — no inject→record→replay feedback loop).
    */
   async handleInbound(event: OneBotEvent, opts: { injected?: boolean } = {}): Promise<void> {
-    const selfId = this.deps.connection.selfId || this.deps.config.botQQ
-    const inbound = normalizeEvent(event, selfId)
+    const inbound = await this.inbound.normalize(event)
     if (inbound === null) {
       this.observeNonMessageEvent(event)
       return

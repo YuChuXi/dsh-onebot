@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { InboundPipeline } from '../src/inbound/index.js'
-import { normalizeOneBot11 } from '../src/inbound/normalize.js'
+import { normalizeEvent, normalizeOneBot11 } from '../src/inbound/normalize.js'
 import type { NormalizedInbound } from '../src/inbound/index.js'
 import { formatRecords, messageRecord } from '../src/onebot/records.js'
 
@@ -246,7 +246,11 @@ describe('inbound pipeline', () => {
     h.client.send(JSON.stringify({
       post_type: 'notice', notice_type: 'notify', sub_type: 'poke',
       user_id: 10001, target_id: 20003, group_id: 888, self_id: 10002,
-      raw_info: [{ uid: 'u-10001', txt: '小明' }, { txt: ' 👋 戳了戳' }, { uid: 'u-20003', txt: '小红' }],
+      raw_info: [
+        { col: '1', nm: '', type: 'qq', uid: 'u-10001' },
+        { txt: ' 👋 戳了戳', type: 'nor' },
+        { col: '1', nm: '', type: 'qq', uid: 'u-20003' },
+      ],
     }))
     await new Promise(resolve => setTimeout(resolve, 100))
     expect(h.captured.followups).toHaveLength(0)
@@ -255,7 +259,13 @@ describe('inbound pipeline', () => {
     h.client.send(JSON.stringify({
       post_type: 'notice', notice_type: 'notify', sub_type: 'poke',
       user_id: 10001, target_id: 10002, group_id: 888, self_id: 10002,
-      raw_info: [{ uid: 'u-10001', txt: '小明' }, { txt: ' 👋 揉了揉' }, { uid: 'u-10002', txt: '鱼' }, { txt: '的肚几' }],
+      raw_info: [
+        { col: '1', nm: '', type: 'qq', uid: 'u-10001' },
+        { jp: 'https://zb.vip.qq.com/v2/pages/nudgeMall', src: 'https://tianquan.gtimg.cn/nudgeaction/item/8/expression.jpg', type: 'img' },
+        { txt: '揉了揉', type: 'nor' },
+        { col: '1', tp: '0', type: 'qq', uid: 'u-10002' },
+        { txt: '的尾巴', type: 'nor' },
+      ],
     }))
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
     const records = delivered(h.captured.followups[0])
@@ -263,11 +273,16 @@ describe('inbound pipeline', () => {
     expect(records).toHaveLength(2)
     expect(records[0]).toMatchObject({ notice: 'notify/poke', target_id: 20003 })
     expect(JSON.stringify(records[0])).toContain('戳了戳')
-    // 事件记录只有 notice 与 OneBot 原始字段：不是发言，没有 qq / nickname / message。
+    // 事件记录只有 notice 与事件本身的字段：不是发言，没有 qq / nickname / message，
+    // 群号由会话表达，raw_info 已整理成 text。
+    expect(records[1]).toMatchObject({
+      notice: 'notify/poke', user_id: 10001, target_id: 10002, text: '10001揉了揉10002的尾巴',
+    })
     expect(records[1]).not.toHaveProperty('qq')
     expect(records[1]).not.toHaveProperty('nickname')
     expect(records[1]).not.toHaveProperty('message')
-    expect(JSON.stringify(records[1])).toContain('揉了揉')
+    expect(records[1]).not.toHaveProperty('group_id')
+    expect(records[1]).not.toHaveProperty('raw_info')
 
     h.client.close()
     await h.bridge.stop()
@@ -294,10 +309,11 @@ describe('inbound pipeline', () => {
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
     const records = delivered(h.captured.followups[0])
     const recall = records.find(record => record.notice === 'group_recall')
-    // notice 只是事件记录：字段与 OneBot 原始事件一致，没有拼出来的中文句子。
+    // notice 只是事件记录：字段与 OneBot 原始事件一致，但群号由会话表达，不再重复。
     expect(recall).toMatchObject({
-      notice: 'group_recall', group_id: 888, user_id: 20003, operator_id: 20003, message_id: 77,
+      notice: 'group_recall', user_id: 20003, operator_id: 20003, message_id: 77,
     })
+    expect(recall).not.toHaveProperty('group_id')
     expect(lastRecord(h.captured.followups[0])).toMatchObject({ qq: '10001' })
 
     h.client.close()
@@ -393,6 +409,30 @@ describe('normalizeOneBot11', () => {
     expect(normalizeOneBot11({
       post_type: 'hug', user_id: 10001, self_id: 10002,
     })).toBeNull()
+  })
+})
+
+describe('normalizeEvent（notice）', () => {
+  it('names the poke participants, drops the session envelope and folds raw_info into text', async () => {
+    const inbound = await normalizeEvent({
+      post_type: 'notice', notice_type: 'notify', sub_type: 'poke',
+      time: 1762000620, self_id: 10002, group_id: 888,
+      user_id: 10001, target_id: 10002,
+      raw_info: [
+        { col: '1', nm: '', type: 'qq', uid: 'u-10001' },
+        { txt: '揉了揉', type: 'nor' },
+        { col: '1', nm: '', type: 'qq', uid: 'u-10002' },
+        { txt: '的尾巴', type: 'nor' },
+      ],
+    }, '10002', async qq => (qq === '10001' ? '小明' : '鱼'))
+
+    expect(inbound?.wakes).toBe(true)
+    expect(inbound?.chatId).toBe('group:888')
+    expect(inbound?.notice).toMatchObject({
+      notice: 'notify/poke', user_id: 10001, target_id: 10002, text: '小明揉了揉鱼的尾巴',
+    })
+    expect(inbound?.notice).not.toHaveProperty('group_id')
+    expect(inbound?.notice).not.toHaveProperty('raw_info')
   })
 })
 
