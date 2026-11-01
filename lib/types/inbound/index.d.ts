@@ -1,5 +1,6 @@
 import type { MediaStore } from '../media/store.js';
 import type { Transcriber } from '../media/stt.js';
+import type { IncomingSegment } from '../onebot/segments.js';
 import type { AccessPolicyConfig, ChatId, UserRole } from '../chat/index.js';
 import type { MessageRecord } from '../onebot/records.js';
 import type { BridgeConfig } from '../bridge/config.js';
@@ -72,8 +73,8 @@ export declare class InboundPipeline {
     private readonly memberCache;
     /** 进行中的成员表拉取，避免一阵 @ 触发多次接口调用。 */
     private readonly memberFetches;
-    /** 会话 → 其他人之间的戳一戳（notice 事件，不在历史里）。 */
-    private readonly pokeBuffers;
+    /** 会话 → 会话事件（戳一戳、撤回、禁言、成员变动等 notice），在下一次载荷里并回同一条时间线。 */
+    private readonly contextBuffers;
     /** 会话 → 已经提示过的休眠窗口标识。 */
     private readonly sleepNotices;
     /** 缓存令牌 → 已取到的本地文件。 */
@@ -276,21 +277,21 @@ export declare class InboundPipeline {
      */
     private noteInjected;
     /**
-     * 记下一次其他人之间的戳一戳。它不会进入消息历史（notice 事件），
-     * 不记下来模型就永远不知道发生过。
+     * 记录一条会话事件（戳一戳、撤回、禁言、成员变动等），等下一次载荷注入时
+     * 并回时间线。事件不唤醒回合：进入上下文，而不是发起对话。
      *
      * Args:
-     *   chatId (ChatId): 群会话。
-     *   from (string): 戳的人。
-     *   to (string): 被戳的人。
+     *   chatId (ChatId): 事件所属会话。
+     *   from (string): 事件涉及的成员 QQ 号。
+     *   segments (IncomingSegment[]): 与普通消息同构的段数组。
      *
      * Returns:
-     *   无。
+     *   void: 无返回值。
      *
      * Callers:
-     *   - `src/bridge/index.ts:handleNotice`。
+     *   - `processInbound`（wakes 为 false 的会话事件）。
      */
-    rememberPoke(chatId: ChatId, from: string, to: string): void;
+    rememberContext(chatId: ChatId, from: string, segments: IncomingSegment[]): void;
     /**
      * 群成员 QQ → 显示名，按群缓存（30 分钟）。
      *
@@ -301,7 +302,7 @@ export declare class InboundPipeline {
      *   Promise<Map<string, string>>: QQ → 显示名。
      *
      * Callers:
-     *   - `fillSegmentAtNames`、`recentMessages`、`src/bridge/index.ts:handleNotice`。
+     *   - `fillSegmentAtNames`、`recentMessages`。
      */
     memberNames(groupId: string): Promise<Map<string, string>>;
     /**

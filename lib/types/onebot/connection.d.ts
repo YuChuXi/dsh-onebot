@@ -64,10 +64,10 @@ export declare class OneBotNotConnectedError extends Error {
  */
 export declare class OneBotConnection {
     readonly config: ConnectionConfig;
-    /** Inbound message event handler; the bridge/plugin wires this. */
-    onMessage: (event: OneBotEvent) => void;
-    /** Meta event handler (self_id learning). */
-    onMeta: (event: OneBotEvent) => void;
+    /** Inbound event handler: every OneBot event (message/notice/meta/request/unknown)
+     * is handed to the business layer unchanged — the transport never filters by
+     * post_type, so no event is dropped before its owner sees it. */
+    onEvent: (event: OneBotEvent) => void;
     /** Connection-state callback. */
     onStatus: (connected: boolean) => void;
     /**

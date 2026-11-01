@@ -41,6 +41,8 @@ export interface NormalizedInbound {
     messageId?: string;
     /** 发送方原始显示名（尚未清洗）。 */
     nickname: string;
+    /** 是否指向机器人本人（等同一次 @）；不指向的事件只进入上下文，不唤醒回合。 */
+    wakes: boolean;
 }
 /**
  * 把一条 OneBot 11 事件收缩成中性入站事件；不是可处理的消息事件时返回 null。
@@ -56,3 +58,21 @@ export interface NormalizedInbound {
  *   - `src/bridge/index.ts:handleInbound`。
  */
 export declare function normalizeOneBot11(event: OneBotEvent): NormalizedInbound | null;
+/**
+ * 把任意入站事件归一化成同一种形状。
+ *
+ * 消息事件直接使用自身字段；notice 事件由 `renderNotice` 渲染成同一形状的
+ * 会话记录（会话由 group_id / user_id 决定，段数组描述发生了什么），
+ * 因此「是否唤醒、进入哪个会话」在归一化之后只有一个判定点。
+ *
+ * Args:
+ *   event (OneBotEvent): 原始事件。
+ *   selfId (string): 机器人自身 QQ，用于判定事件是否指向机器人。
+ *
+ * Returns:
+ *   NormalizedInbound | null: 归一化结果；不构成会话内容时为 null。
+ *
+ * Callers:
+ *   - `src/bridge/index.ts:handleInbound`。
+ */
+export declare function normalizeEvent(event: OneBotEvent, selfId: string): NormalizedInbound | null;

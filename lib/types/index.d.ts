@@ -15,7 +15,6 @@ import type { AgentRegistry } from '@deepseek-ai/dsh-agent';
 import type { SessionStore } from '@deepseek-ai/dsh-session';
 import type { ModelSelection } from '@deepseek-ai/dsh-agent';
 import type Z from '@deepseek-ai/schemastery';
-import type { OneBotEvent } from './onebot/connection.js';
 type Context = CordisContext & {
     tools: ToolRuntime;
     systemPrompt: SystemPrompt;
@@ -178,8 +177,6 @@ export declare function defaultMediaDir(): string;
 /** The dsh data home ($DSH_HOME or ~/.dsh); source of the .agent-presets dir. */
 export declare function dshHome(): string;
 export declare const Config: Z<Config>;
-/** Log a meta event; periodic heartbeat events are silenced to keep the log readable. */
-export declare function logMetaEvent(selfId: string, event: OneBotEvent, minLevel?: Config['logLevel']): void;
 /** Mount the plugin. */
 export declare function apply(ctx: Context, config: Config): void;
 export {};

@@ -160,20 +160,19 @@ export declare class ChatBridge {
         injected?: boolean;
     }): Promise<void>;
     /**
-     * 值得一个回合的 notice 事件：指向机器人的戳一戳等同于一次 @，
-     * 通过合成管线已经认识的消息事件（一个 poke 段）交给入站管线；
-     * 其他人互相戳只在会话缓冲里记一笔，等下次窗口带进载荷。
+     * 记录不进入回合的事件（meta / request / 未知类型），并保持各自的日志级别。
+     * 这类事件不丢弃语义：它们由本层明确判定为「不产生回复」，而不是在连接层消失。
      *
      * Args:
-     *   event (OneBotEvent): 原始 notice 事件。
+     *   event (OneBotEvent): 已到达业务层的非 message 事件。
      *
      * Returns:
-     *   Promise<void>: 处理完成。
+     *   void: 无返回值。
      *
      * Callers:
-     *   - `handleInbound`（post_type === 'notice'）。
+     *   - `handleInbound`（post_type !== 'message' 且不是可唤醒的 notice）。
      */
-    private handleNotice;
+    private observeNonMessageEvent;
     private handleInboundOnce;
     /** W1: mint the inbound traceId + scope and record the first (收到消息)
      * event; undefined when tracing is off (zero overhead, zero difference).
