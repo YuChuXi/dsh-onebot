@@ -95,7 +95,7 @@ describe('ChatRegistry', () => {
       },
       log: () => undefined,
     })
-    connection.onMessage = event => { void bridge.handleInbound(event) }
+    connection.onEvent = event => { void bridge.handleInbound(event) }
     bridge.start()
     connection.start()
     await vi.waitFor(() => expect(connection.address()).toBeDefined())
@@ -238,7 +238,7 @@ describe('ChatRegistry', () => {
       },
       log: () => undefined,
     })
-    connection.onMessage = event => {
+    connection.onEvent = event => {
       void bridge.handleInbound(event)
     }
     bridge.start()

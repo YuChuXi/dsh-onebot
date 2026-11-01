@@ -326,14 +326,6 @@ function resolvePolicy(config: Config): AccessPolicyConfig {
 /** Severity rank for the logLevel gate (debug < info < warn < error). */
 const LOG_LEVEL_RANK: Record<Config['logLevel'], number> = { debug: 0, info: 1, warn: 2, error: 3 }
 
-/** Log a meta event; periodic heartbeat events are silenced to keep the log readable. */
-export function logMetaEvent(selfId: string, event: OneBotEvent, minLevel: Config['logLevel'] = 'info'): void {
-  const metaType = typeof event.meta_event_type === 'string' ? event.meta_event_type : ''
-  if (metaType === 'heartbeat') return
-  if (LOG_LEVEL_RANK.info < LOG_LEVEL_RANK[minLevel]) return
-  console.log('[dsh-onebot] meta event; bot QQ: ' + selfId + '; ' + metaType)
-}
-
 /** Mount the plugin. */
 export function apply(ctx: Context, config: Config): void {
   const mediaDir = config.mediaDir !== '' ? config.mediaDir : defaultMediaDir()
@@ -397,11 +389,8 @@ export function apply(ctx: Context, config: Config): void {
     model: config.sttModel,
     timeoutMs: config.sttTimeoutMs,
   })
-  connection.onMessage = (event: OneBotEvent) => {
+  connection.onEvent = (event: OneBotEvent) => {
     void bridge.handleInbound(event)
-  }
-  connection.onMeta = (event: OneBotEvent) => {
-    logMetaEvent(connection.selfId, event, config.logLevel)
   }
   // W2-②③ 闸门键：BridgeConfig（bridge/config.ts）保持声明形状；管线通过
   // 可选交叉成员从运行期对象读取（见 InboundContext/OutboundContext.config），

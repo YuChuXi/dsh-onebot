@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import WebSocket, { WebSocketServer } from 'ws'
 import { OneBotConnection } from '../src/onebot/connection.js'
 import type { OneBotEvent } from '../src/onebot/connection.js'
-import { Config, logMetaEvent } from '../src/index.js'
+import { Config } from '../src/index.js'
 
 const CONFIG = {
   mode: 'reverse' as const,
@@ -18,7 +18,7 @@ describe('reverse server', () => {
     const events: OneBotEvent[] = []
     const connection = (() => {
       const conn = new OneBotConnection({ ...CONFIG, accessToken: 'tok' })
-      conn.onMessage = event => events.push(event)
+      conn.onEvent = event => events.push(event)
       return conn
     })()
     connection.start()
@@ -130,7 +130,7 @@ describe('reverse server', () => {
   it('does not log raw message events', async () => {
     const events: OneBotEvent[] = []
     const connection = new OneBotConnection({ ...CONFIG, accessToken: 'tok' })
-    connection.onMessage = event => events.push(event)
+    connection.onEvent = event => events.push(event)
     connection.start()
     await vi.waitFor(() => expect(connection.address()).toBeDefined())
     const address = connection.address()!
@@ -301,25 +301,25 @@ describe('heartbeat pong watchdog', () => {
   })
 })
 
-describe('meta event logging', () => {
-  it('keeps heartbeat meta silent but still logs other meta events', async () => {
+describe('event delivery', () => {
+  it('hands every post_type to onEvent unchanged (no transport-level filtering)', async () => {
+    const events: OneBotEvent[] = []
     const connection = new OneBotConnection({ ...CONFIG, accessToken: 'tok' })
-    connection.onMeta = event => logMetaEvent(connection.selfId, event)
+    connection.onEvent = event => events.push(event)
     connection.start()
     await vi.waitFor(() => expect(connection.address()).toBeDefined())
     const address = connection.address()!
     const client = new WebSocket('ws://127.0.0.1:' + address.port + '/ws', { headers: { Authorization: 'Bearer tok' } })
     await vi.waitFor(() => expect(client.readyState).toBe(WebSocket.OPEN))
-    const logSpy = vi.spyOn(console, 'log') // attached after the 'listening' log
 
     client.send(JSON.stringify({ post_type: 'meta_event', meta_event_type: 'heartbeat', self_id: 10002 }))
-    await vi.waitFor(() => expect(connection.selfId).toBe('10002')) // the frame reached the real dispatch
-    expect(logSpy).not.toHaveBeenCalled()
+    client.send(JSON.stringify({ post_type: 'request', request_type: 'friend', sub_type: 'add', user_id: 1, comment: '' }))
+    client.send(JSON.stringify({ post_type: 'notice', notice_type: 'notify', sub_type: 'poke', user_id: 1, target_id: 10002 }))
+    client.send(JSON.stringify({ post_type: 'message', message_type: 'private', user_id: 1, message: 'hi', self_id: 10002 }))
+    await vi.waitFor(() => expect(events).toHaveLength(4))
+    expect(events.map(event => event.post_type)).toEqual(['meta_event', 'request', 'notice', 'message'])
+    expect(connection.selfId).toBe('10002')
 
-    client.send(JSON.stringify({ post_type: 'meta_event', meta_event_type: 'life_cycle', self_id: 10002 }))
-    await vi.waitFor(() => expect(logSpy).toHaveBeenCalledTimes(1))
-    expect(String(logSpy.mock.calls[0]?.[0])).toContain('life_cycle')
-    logSpy.mockRestore()
     client.close()
     await connection.stop()
   })

@@ -23,7 +23,7 @@ import type { Transcriber } from '../media/stt.js'
 import { transcriptLabel } from '../media/stt.js'
 import type { MediaRef } from '../onebot/segments.js'
 import type { ChatId, UserRole } from '../chat/index.js'
-import { buildChatId, classifyUserRole, displayName, splitChatId } from '../chat/index.js'
+import { classifyUserRole, displayName, splitChatId } from '../chat/index.js'
 import type { AccessPolicyConfig } from '../chat/index.js'
 import { buildPlatformPrompt } from './prompt.js'
 import { registerTools } from '../tools/index.js'
@@ -33,7 +33,7 @@ import type { OutboundSegment, SendOptions } from '../outbound/index.js'
 import { ChatRegistry } from '../registry/index.js'
 import type { ChatAgent } from '../registry/index.js'
 import { InboundPipeline } from '../inbound/index.js'
-import { normalizeOneBot11 } from '../inbound/normalize.js'
+import { normalizeEvent } from '../inbound/normalize.js'
 import type { NormalizedInbound } from '../inbound/normalize.js'
 import { describeError, errorStack } from '../shared/errors.js'
 import { currentTrace, newTraceId, runWithTrace, TRACE_REASONS } from '../ops/trace.js'
@@ -320,81 +320,53 @@ export class ChatBridge {
    * events are never recorded — no inject→record→replay feedback loop).
    */
   async handleInbound(event: OneBotEvent, opts: { injected?: boolean } = {}): Promise<void> {
-    // 戳一戳是 notice 事件：指向机器人的那次唤醒一个回合，其余只进上文缓冲。
-    if (event.post_type === 'notice' && opts.injected !== true) {
-      await this.handleNotice(event)
+    const selfId = this.deps.connection.selfId || this.deps.config.botQQ
+    const inbound = normalizeEvent(event, selfId)
+    if (inbound === null) {
+      this.observeNonMessageEvent(event)
       return
     }
-    const run = (): Promise<void> => this.handleInboundOnce(event, opts.injected === true)
+    const run = (): Promise<void> => this.handleInboundOnce(event, inbound, opts.injected === true)
     return opts.injected === true
       ? runInjectRound({ traceId: newTraceId(), intercepted: 0 }, run)
       : run()
   }
 
   /**
-   * 值得一个回合的 notice 事件：指向机器人的戳一戳等同于一次 @，
-   * 通过合成管线已经认识的消息事件（一个 poke 段）交给入站管线；
-   * 其他人互相戳只在会话缓冲里记一笔，等下次窗口带进载荷。
+   * 记录不进入回合的事件（meta / request / 未知类型），并保持各自的日志级别。
+   * 这类事件不丢弃语义：它们由本层明确判定为「不产生回复」，而不是在连接层消失。
    *
    * Args:
-   *   event (OneBotEvent): 原始 notice 事件。
+   *   event (OneBotEvent): 已到达业务层的非 message 事件。
    *
    * Returns:
-   *   Promise<void>: 处理完成。
+   *   void: 无返回值。
    *
    * Callers:
-   *   - `handleInbound`（post_type === 'notice'）。
+   *   - `handleInbound`（post_type !== 'message' 且不是可唤醒的 notice）。
    */
-  private async handleNotice(event: OneBotEvent): Promise<void> {
-    const noticeType = String(event.notice_type ?? '')
-    const subType = String(event.sub_type ?? '')
-    if (!(noticeType === 'poke' || (noticeType === 'notify' && subType === 'poke'))) return
-    const selfId = this.deps.connection.selfId || this.deps.config.botQQ
-    const target = event.target_id === undefined ? '' : String(event.target_id)
-    const sender = event.user_id === undefined ? '' : String(event.user_id)
-    if (sender === '' || sender === selfId) return
-    const groupId = event.group_id === undefined ? '' : String(event.group_id)
-    if (target !== '' && selfId !== '' && target !== selfId) {
-      // 两个人互相戳：不唤醒，但模型也该知道发生过（notice 不进历史）。
-      if (groupId !== '') {
-        this.inbound.rememberPoke(buildChatId('group', groupId), sender, target)
-        this.deps.log('info', 'poke observed: group ' + groupId + ' ' + sender + ' -> ' + target)
+  private observeNonMessageEvent(event: OneBotEvent): void {
+    const postType = String(event.post_type ?? '')
+    if (postType === 'meta_event') {
+      const metaType = typeof event.meta_event_type === 'string' ? event.meta_event_type : ''
+      if (metaType !== 'heartbeat') {
+        this.deps.log('info', 'meta event; bot QQ: ' + (this.deps.connection.selfId || this.deps.config.botQQ) + '; ' + metaType)
       }
       return
     }
-    const kind: 'private' | 'group' = groupId !== '' ? 'group' : 'private'
-    const now = Date.now()
-    // 与其他入站消息同一套归一化：只有 id 没有上下文，显示名随段一起走。
-    let nickname = ''
-    if (kind === 'group' && groupId !== '') nickname = (await this.inbound.memberNames(groupId)).get(sender) ?? ''
-    if (nickname === '' && kind === 'private') {
-      nickname = this.chats.get(buildChatId('private', sender))?.lastNickname ?? ''
-      if (nickname === '') {
-        const info = await this.deps.connection.call('get_stranger_info', { user_id: Number(sender) }) as {
-          nickname?: string
-        } | undefined
-        nickname = typeof info?.nickname === 'string' ? info.nickname : ''
-      }
+    if (postType === 'request') {
+      this.deps.log('info', 'request event observed (request_type=' + String(event.request_type ?? '') + ', sub_type=' + String(event.sub_type ?? '') + '); no approval path configured')
+      return
     }
-    this.deps.log('info', 'poke wake: ' + kind + ' ' + (kind === 'group' ? groupId : sender) + ' from ' + sender)
-    await this.handleInbound({
-      post_type: 'message',
-      message_type: kind,
-      message_id: 'poke-' + now + '-' + sender,
-      time: Math.floor(now / 1000),
-      ...(kind === 'group' ? { group_id: groupId } : {}),
-      user_id: sender,
-      sender: { user_id: sender, nickname: nickname !== '' ? nickname : sender },
-      message: [{ type: 'poke', data: { id: sender, ...(nickname !== '' ? { name: nickname } : {}) } }],
-    })
+    this.deps.log('debug', 'unhandled event type: ' + postType)
   }
 
-  private async handleInboundOnce(event: OneBotEvent, injected: boolean): Promise<void> {
+  private async handleInboundOnce(event: OneBotEvent, inbound: NormalizedInbound, injected: boolean): Promise<void> {
     // Recording: skipped for injected events (they would otherwise feed the
     // injector again through replay) and skipped when no recorder exists.
     const recorder = injected ? undefined : this.deps.config.recorder
     const session = recorder?.begin(event) ?? undefined
-    const trace = this.beginInboundTrace(event)
+    const trace = this.beginInboundTrace(inbound)
     const scope = trace !== undefined
       ? (session !== undefined ? session.wrapScope(trace) : trace)
       : session?.captureScope()
@@ -403,12 +375,6 @@ export class ChatBridge {
         if (this.stopping) {
           this.deps.log('debug', '插件停止中，入站消息丢弃')
           scope?.emit('inbound', { ok: false, reason: TRACE_REASONS.inboundStopping })
-          return
-        }
-        const inbound = normalizeOneBot11(event)
-        if (inbound === null) {
-          this.deps.log('debug', '非聊天消息事件，不处理（post_type=' + String(event.post_type) + '）')
-          scope?.emit('normalize', { ok: false, reason: TRACE_REASONS.inboundNotChat })
           return
         }
         await this.processInbound(inbound)
@@ -426,17 +392,12 @@ export class ChatBridge {
    * W1/T5: an injected event REUSES its inject round's traceId, so the whole
    * injected round (pipeline decisions + intercepted outbound calls) shares
    * one traceId in the trace stream. */
-  private beginInboundTrace(event: OneBotEvent): TraceScope | undefined {
+  private beginInboundTrace(inbound: NormalizedInbound): TraceScope | undefined {
     const sink = this.deps.config.trace
     if (sink === undefined || !sink.enabled) return undefined
-    const kind = event.message_type === 'group' ? 'group' : event.message_type === 'private' ? 'private' : undefined
-    const chatId = kind !== undefined
-      ? buildChatId(kind, String(kind === 'group' ? event.group_id ?? '' : event.user_id ?? ''))
-      : ''
-    const messageId = event.message_id === undefined || event.message_id === null ? undefined : String(event.message_id)
     const traceId = currentInjectRound()?.traceId ?? newTraceId(sink.now())
-    const scope = sink.scope(traceId, chatId, messageId)
-    sink.emit({ traceId: scope.traceId, stage: 'inbound', ok: true, chatId, messageId, data: { messageType: String(event.message_type ?? '') } })
+    const scope = sink.scope(traceId, inbound.chatId, inbound.messageId)
+    sink.emit({ traceId: scope.traceId, stage: 'inbound', ok: true, chatId: inbound.chatId, messageId: inbound.messageId, data: { messageType: inbound.kind } })
     return scope
   }
 

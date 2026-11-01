@@ -8,6 +8,7 @@ import { incomingSegments } from '../onebot/segments.js'
 import type { IncomingSegment } from '../onebot/segments.js'
 import type { ChatId } from '../chat/index.js'
 import { buildChatId, displayName } from '../chat/index.js'
+import { renderNotice } from './notice.js'
 
 /** 一条 OneBot 消息对象里管线会读的字段（实现之间略有出入）。 */
 export interface RawMessage {
@@ -46,6 +47,8 @@ export interface NormalizedInbound {
   messageId?: string
   /** 发送方原始显示名（尚未清洗）。 */
   nickname: string
+  /** 是否指向机器人本人（等同一次 @）；不指向的事件只进入上下文，不唤醒回合。 */
+  wakes: boolean
 }
 
 /**
@@ -83,5 +86,52 @@ export function normalizeOneBot11(event: OneBotEvent): NormalizedInbound | null 
     message: event as RawMessage,
     messageId,
     nickname,
+    wakes: true,
+  }
+}
+
+/**
+ * 把任意入站事件归一化成同一种形状。
+ *
+ * 消息事件直接使用自身字段；notice 事件由 `renderNotice` 渲染成同一形状的
+ * 会话记录（会话由 group_id / user_id 决定，段数组描述发生了什么），
+ * 因此「是否唤醒、进入哪个会话」在归一化之后只有一个判定点。
+ *
+ * Args:
+ *   event (OneBotEvent): 原始事件。
+ *   selfId (string): 机器人自身 QQ，用于判定事件是否指向机器人。
+ *
+ * Returns:
+ *   NormalizedInbound | null: 归一化结果；不构成会话内容时为 null。
+ *
+ * Callers:
+ *   - `src/bridge/index.ts:handleInbound`。
+ */
+export function normalizeEvent(event: OneBotEvent, selfId: string): NormalizedInbound | null {
+  if (event.post_type === 'message' || event.message_type !== undefined) return normalizeOneBot11(event)
+  if (event.post_type !== 'notice') return null
+  const record = renderNotice(event, selfId)
+  if (record === null) return null
+  const groupId = String(event.group_id ?? '')
+  const kind: 'private' | 'group' = groupId !== '' ? 'group' : 'private'
+  const userId = record.from
+  if (userId === '') return null
+  const chatId = buildChatId(kind, kind === 'private' ? userId : groupId)
+  const time = event.time === undefined ? undefined : Number(event.time)
+  const message: RawMessage = {
+    user_id: userId,
+    time,
+    sender: { user_id: userId },
+    message: record.segments,
+  }
+  return {
+    kind,
+    userId,
+    groupId,
+    chatId,
+    segments: record.segments,
+    message,
+    nickname: '',
+    wakes: record.wakes,
   }
 }

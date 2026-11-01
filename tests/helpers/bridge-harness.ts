@@ -178,7 +178,7 @@ export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: st
     },
     log: (level: string, message: string) => opts?.log?.(level, message),
   })
-  connection.onMessage = event => {
+  connection.onEvent = event => {
     void bridge.handleInbound(event)
   }
   // 入站窗口会向 NapCat 拉群历史与群成员表：测试里没有真实的 OneBot 服务端，
@@ -320,7 +320,7 @@ export async function makeCmdHarness(opts?: {
       return await real(action, params)
     }) as never
   }
-  connection.onMessage = event => { void bridge.handleInbound(event) }
+  connection.onEvent = event => { void bridge.handleInbound(event) }
   // 群历史窗口与成员表在测试里没有真实服务端：空结果 = 只注入触发消息。
   const realCall = connection.call.bind(connection)
   connection.call = (async (action: string, params: Record<string, unknown>) => {

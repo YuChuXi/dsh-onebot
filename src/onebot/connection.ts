@@ -121,10 +121,10 @@ interface PendingAction {
 export class OneBotConnection {
   readonly config: ConnectionConfig
 
-  /** Inbound message event handler; the bridge/plugin wires this. */
-  onMessage: (event: OneBotEvent) => void = () => undefined
-  /** Meta event handler (self_id learning). */
-  onMeta: (event: OneBotEvent) => void = () => undefined
+  /** Inbound event handler: every OneBot event (message/notice/meta/request/unknown)
+   * is handed to the business layer unchanged — the transport never filters by
+   * post_type, so no event is dropped before its owner sees it. */
+  onEvent: (event: OneBotEvent) => void = () => undefined
   /** Connection-state callback. */
   onStatus: (connected: boolean) => void = () => undefined
   /**
@@ -613,7 +613,10 @@ export class OneBotConnection {
       this.log('warn', 'dropping non-JSON WS frame')
       return
     }
-    if (typeof payload !== 'object' || payload === null) return
+    if (typeof payload !== 'object' || payload === null) {
+      this.log('warn', 'dropping non-object WS frame: ' + String(payload).slice(0, 80))
+      return
+    }
     const frame = payload as Record<string, unknown>
 
     if (typeof frame.echo === 'string' && this.pending.has(frame.echo)) {
@@ -636,23 +639,11 @@ export class OneBotConnection {
       if (typeof event.self_id === 'number' || typeof event.self_id === 'string') {
         this.selfId = String(event.self_id)
       }
-      if (event.post_type === 'message') {
-        try {
-          this.onMessage(event)
-        } catch (error) {
-          this.log('error', 'onMessage handler failed: ' + describeError(error) + errorStack(error))
-        }
-        return
+      try {
+        this.onEvent(event)
+      } catch (error) {
+        this.log('error', 'onEvent handler failed: ' + describeError(error) + errorStack(error))
       }
-      if (event.post_type === 'meta_event') {
-        try {
-          this.onMeta(event)
-        } catch (error) {
-          this.log('error', 'onMeta handler failed: ' + describeError(error) + errorStack(error))
-        }
-        return
-      }
-      // notice / request events are intentionally ignored (v1).
     }
   }
 }

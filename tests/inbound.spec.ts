@@ -239,6 +239,72 @@ describe('inbound pipeline', () => {
     await h.bridge.stop()
     await h.connection.stop()
   })
+
+  it('wakes a group chat when the bot is poked and only buffers pokes between other members', async () => {
+    const h = await makeHarness()
+    // 其他人互戳：只进会话缓冲，等下次窗口带进载荷，不唤醒。
+    h.client.send(JSON.stringify({
+      post_type: 'notice', notice_type: 'notify', sub_type: 'poke',
+      user_id: 10001, target_id: 20003, group_id: 888, self_id: 10002,
+    }))
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(h.captured.followups).toHaveLength(0)
+
+    // 戳机器人本人：notice 分支合成一条 poke 段消息，等同 @，唤醒一个回合。
+    h.client.send(JSON.stringify({
+      post_type: 'notice', notice_type: 'notify', sub_type: 'poke',
+      user_id: 10001, target_id: 10002, group_id: 888, self_id: 10002,
+    }))
+    await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
+    expect(lastRecord(h.captured.followups[0])).toMatchObject({ qq: '10001' })
+
+    h.client.close()
+    await h.bridge.stop()
+    await h.connection.stop()
+  })
+
+  it('records conversation notices into context without waking, then injects them with the next turn', async () => {
+    const h = await makeHarness()
+    // 撤回不是对话发起：不唤醒，但属于该会话的内容。
+    h.client.send(JSON.stringify({
+      post_type: 'notice', notice_type: 'group_recall',
+      group_id: 888, user_id: 20003, operator_id: 20003, message_id: 77, self_id: 10002,
+    }))
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(h.captured.followups).toHaveLength(0)
+
+    h.client.send(JSON.stringify({
+      post_type: 'message', message_type: 'group', group_id: 888, user_id: 10001, message_id: 78,
+      time: Math.floor(Date.now() / 1000),
+      message: [{ type: 'at', data: { qq: '10002' } }, { type: 'text', data: { text: '刚才那条呢' } }],
+      sender: { user_id: 10001, nickname: '小明' },
+      self_id: 10002,
+    }))
+    await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
+    expect(h.captured.followups[0].text).toContain('撤回了一条消息')
+
+    h.client.close()
+    await h.bridge.stop()
+    await h.connection.stop()
+  })
+
+  it('records meta and request events at the business layer, keeping heartbeat silent', async () => {
+    const logs: string[] = []
+    const h = await makeHarness({ log: (level, message) => logs.push(level + ': ' + message) })
+    h.client.send(JSON.stringify({ post_type: 'meta_event', meta_event_type: 'heartbeat', self_id: 10002 }))
+    h.client.send(JSON.stringify({ post_type: 'meta_event', meta_event_type: 'life_cycle', self_id: 10002 }))
+    h.client.send(JSON.stringify({ post_type: 'request', request_type: 'friend', sub_type: 'add', user_id: 30001 }))
+    await vi.waitFor(() => {
+      expect(logs.some(line => line.includes('life_cycle'))).toBe(true)
+      expect(logs.some(line => line.includes('request event observed'))).toBe(true)
+    })
+    expect(logs.some(line => line.includes('heartbeat'))).toBe(false)
+    expect(h.captured.followups).toHaveLength(0)
+
+    h.client.close()
+    await h.bridge.stop()
+    await h.connection.stop()
+  })
 })
 
 describe('normalizeOneBot11', () => {
@@ -557,7 +623,7 @@ describe('inbound message_id dedup (W2-②)', () => {
     expect(enabled.logs.some(l => l.includes('dedup hit'))).toBe(false)
   })
 
-  it('never gates notice/meta events — they normalize to null and cannot reach the pipeline', () => {
+  it('keeps normalizeOneBot11 restricted to message events (notice handled by normalizeEvent)', () => {
     expect(normalizeOneBot11({
       post_type: 'notice', notice_type: 'recall', user_id: 10001, self_id: 10002, message_id: 5,
     })).toBeNull()

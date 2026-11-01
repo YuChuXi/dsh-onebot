@@ -125,7 +125,7 @@ export function groupAllowed(groupId: string, policy: AccessPolicyConfig): boole
  * Callers:
  *   - `src/inbound/normalize.ts:normalizeOneBot11`：入站事件边界。
  *   - `src/inbound/index.ts:InboundPipeline`：recordOf、引用与转发节点。
- *   - `src/bridge/index.ts:handleNotice`：戳一戳唤醒的合成消息。
+ *   - `src/inbound/normalize.ts:normalizeEvent`：入站事件归一化。
  */
 export function displayName(sender: { card?: string; nickname?: string } | undefined, fallback: string): string {
   const card = sender?.card

@@ -109,8 +109,8 @@ export class InboundPipeline {
   private readonly memberCache = new Map<string, { at: number; names: Map<string, string> }>()
   /** 进行中的成员表拉取，避免一阵 @ 触发多次接口调用。 */
   private readonly memberFetches = new Map<string, Promise<Map<string, string>>>()
-  /** 会话 → 其他人之间的戳一戳（notice 事件，不在历史里）。 */
-  private readonly pokeBuffers = new Map<ChatId, Array<{ at: number; from: string; to: string }>>()
+  /** 会话 → 会话事件（戳一戳、撤回、禁言、成员变动等 notice），在下一次载荷里并回同一条时间线。 */
+  private readonly contextBuffers = new Map<ChatId, Array<{ at: number; from: string; segments: IncomingSegment[] }>>()
   /** 会话 → 已经提示过的休眠窗口标识。 */
   private readonly sleepNotices = new Map<ChatId, string>()
   /** 缓存令牌 → 已取到的本地文件。 */
@@ -145,6 +145,12 @@ export class InboundPipeline {
    *   - `src/bridge/index.ts:processInbound`。
    */
   async processInbound(inbound: NormalizedInbound): Promise<void> {
+    // 不指向机器人的会话事件只进入上下文：模型下次看到它，但不因此发起回复。
+    if (!inbound.wakes) {
+      this.rememberContext(inbound.chatId, inbound.userId, inbound.segments)
+      this.ctx.log('debug', '会话事件已记入上下文: ' + inbound.chatId)
+      return
+    }
     if (this.duplicated(inbound)) return
     const { kind, userId, groupId, chatId } = inbound
     if (this.ctx.config.ignoreSelf && this.ctx.selfId() !== '' && userId === this.ctx.selfId()) {
@@ -629,23 +635,24 @@ export class InboundPipeline {
       if (!Array.isArray(message?.message) || message.message.length === 0) continue
       entries.push({ time, message })
     }
-    // 戳一戳是 notice 事件不是历史行：它们在自己的缓冲里，这里并回同一条时间线。
-    const pokes = peek ? [] : this.pokeBuffers.get(chatId) ?? []
-    const names = pokes.length > 0 ? await this.memberNames(groupId) : new Map<string, string>()
-    for (const poke of pokes) {
-      if (poke.at <= anchorTime || poke.at > triggerTime) continue
-      if (poke.from === this.ctx.selfId()) continue
+    // 会话事件（戳一戳、撤回、禁言、成员变动等）不是历史行：它们在自己的
+    // 缓冲里，这里按时间顺序并回同一条时间线。
+    const events = peek ? [] : this.contextBuffers.get(chatId) ?? []
+    const names = groupId !== '' && events.length > 0 ? await this.memberNames(groupId) : new Map<string, string>()
+    for (const event of events) {
+      if (event.at <= anchorTime || event.at > triggerTime) continue
+      if (event.from === this.ctx.selfId()) continue
       entries.push({
-        time: poke.at,
+        time: event.at,
         message: {
-          user_id: poke.from,
-          time: poke.at,
-          sender: { user_id: poke.from, nickname: names.get(poke.from) ?? poke.from },
-          message: [{ type: 'poke', data: { qq: poke.to } }],
+          user_id: event.from,
+          time: event.at,
+          sender: { user_id: event.from, nickname: names.get(event.from) ?? event.from },
+          message: event.segments,
         },
       })
     }
-    if (!peek) this.pokeBuffers.delete(chatId)
+    if (!peek) this.contextBuffers.delete(chatId)
     // 载荷最后一条永远是触发消息：历史里已入库就用它，否则补到末尾。
     // 没有 message_id 的事件无法按 id 比对，直接补上——它不属于任何历史行。
     if (trigger !== undefined) {
@@ -691,27 +698,27 @@ export class InboundPipeline {
   }
 
   /**
-   * 记下一次其他人之间的戳一戳。它不会进入消息历史（notice 事件），
-   * 不记下来模型就永远不知道发生过。
+   * 记录一条会话事件（戳一戳、撤回、禁言、成员变动等），等下一次载荷注入时
+   * 并回时间线。事件不唤醒回合：进入上下文，而不是发起对话。
    *
    * Args:
-   *   chatId (ChatId): 群会话。
-   *   from (string): 戳的人。
-   *   to (string): 被戳的人。
+   *   chatId (ChatId): 事件所属会话。
+   *   from (string): 事件涉及的成员 QQ 号。
+   *   segments (IncomingSegment[]): 与普通消息同构的段数组。
    *
    * Returns:
-   *   无。
+   *   void: 无返回值。
    *
    * Callers:
-   *   - `src/bridge/index.ts:handleNotice`。
+   *   - `processInbound`（wakes 为 false 的会话事件）。
    */
-  rememberPoke(chatId: ChatId, from: string, to: string): void {
-    if (from === '' || to === '' || chatId === '') return
+  rememberContext(chatId: ChatId, from: string, segments: IncomingSegment[]): void {
+    if (chatId === '' || from === '' || segments.length === 0) return
     const at = Math.floor(this.now() / 1000)
-    const buffer = this.pokeBuffers.get(chatId) ?? []
-    buffer.push({ at, from: String(from), to: String(to) })
+    const buffer = this.contextBuffers.get(chatId) ?? []
+    buffer.push({ at, from: String(from), segments })
     while (buffer.length > 100) buffer.shift()
-    this.pokeBuffers.set(chatId, buffer)
+    this.contextBuffers.set(chatId, buffer)
   }
 
   /**
@@ -724,7 +731,7 @@ export class InboundPipeline {
    *   Promise<Map<string, string>>: QQ → 显示名。
    *
    * Callers:
-   *   - `fillSegmentAtNames`、`recentMessages`、`src/bridge/index.ts:handleNotice`。
+   *   - `fillSegmentAtNames`、`recentMessages`。
    */
   async memberNames(groupId: string): Promise<Map<string, string>> {
     const cached = this.memberCache.get(groupId)
