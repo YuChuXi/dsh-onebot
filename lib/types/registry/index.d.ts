@@ -15,7 +15,7 @@ import type { Agent, AgentRegistry, ModelSelection } from '@deepseek-ai/dsh-agen
 import type { SessionId, SessionStore } from '@deepseek-ai/dsh-session';
 import type { Context } from '@deepseek-ai/cordis';
 import type { ChatId, UserRole } from '../chat/index.js';
-import type { AgentPresetsLike, BridgeConfig, SessionPersistenceLike, WorkspaceRegistryLike } from '../bridge/config.js';
+import type { AgentPresetsLike, BridgeConfig, SessionPersistenceLike, SessionTitlePort, WorkspaceRegistryLike } from '../bridge/config.js';
 /** One switchable (retired-but-intact) session of a chat: /new, /workspace and
  * /preset switches retire the live session with its history intact — /session
  * can switch the chat back to it. Newest first, deduped, capped per chat. */
@@ -120,6 +120,10 @@ export interface RegistryDeps {
     sessions: SessionStore;
     sessionPersistence: SessionPersistenceLike | undefined;
     workspaceRegistry: WorkspaceRegistryLike | undefined;
+    /** OneBot 动作调用：会话命名要取群名 / 好友昵称。 */
+    call(action: string, params: Record<string, unknown>): Promise<unknown>;
+    /** 宿主会话标题服务（dsh-session-title）的惰性查找；absent = 不命名。 */
+    sessionTitle?: (() => SessionTitlePort | undefined) | undefined;
     agentPresets: AgentPresetsLike | undefined;
     defaultModel: (() => ModelSelection | undefined) | undefined;
     /** The only config fields the registry reads. */
@@ -149,6 +153,8 @@ export declare class ChatRegistry {
     readonly bySession: Map<string, string>;
     /** Per-chat settings (workspace/preset/watermark), lazy-created. */
     private readonly chatSettings;
+    /** 会话 id → QQ 侧的显示名（群名 / 昵称），取到就缓存。 */
+    private readonly displayNames;
     /** Session ids whose persisted logs are unusable (collision heals, failed
      * resumes, create collisions); creates must avoid them. Deliberately kept
      * apart from retiredSessionIds: /session's soft-retired (switchable) ids
@@ -196,6 +202,49 @@ export declare class ChatRegistry {
     /** Get (or create) the agent for a chat. */
     ensureChat(chatId: ChatId, nickname: string): Promise<ChatAgent>;
     private createChat;
+    /**
+     * 会话在 QQ 侧的显示名：群名或好友昵称；取不到时 ''。
+     *
+     * Args:
+     *   chatId (ChatId): 会话 id。
+     *
+     * Returns:
+     *   Promise<string>: 显示名；查询失败时 ''（标题退回号码）。
+     *
+     * Callers:
+     *   - `chatTitle`。
+     */
+    private displayName;
+    /**
+     * 会话标题：「群 <群名> · MM-DD HH:MM」/「私聊 <昵称> · MM-DD HH:MM」，
+     * 时间取会话自身的建立时间而不是被挂上的时刻。
+     *
+     * Args:
+     *   chatId (ChatId): 会话 id。
+     *   startedAt (number | undefined): 会话建立时间（毫秒）。
+     *
+     * Returns:
+     *   Promise<string>: 标题文本。
+     *
+     * Callers:
+     *   - `applySessionTitle`。
+     */
+    private chatTitle;
+    /**
+     * 给会话起名，宿主会话列表不再是一片「未命名」。
+     * 只接管空标题与自己生成的名字（「群 」/「私聊 」开头），用户手动改名永不覆盖。
+     *
+     * Args:
+     *   chat (ChatAgent): 刚建立或恢复的会话。
+     *   chatId (ChatId): 会话 id。
+     *
+     * Returns:
+     *   Promise<void>: 完成（失败只记日志）。
+     *
+     * Callers:
+     *   - `createChat`、`resumeChat`。
+     */
+    private applySessionTitle;
     /** T3: apply the persisted-settings snapshot (workspace override, watermark)
      * of an evicted or reset chat onto its settings entry — shared by the
      * evicted-resume path and its retired-session fast path. */

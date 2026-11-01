@@ -28,6 +28,8 @@ function makeRegistryDeps(overrides?: {
     sessions: { flush: vi.fn(async () => undefined) } as never,
     sessionPersistence: undefined,
     workspaceRegistry: undefined as never,
+    call: async () => ({}),
+    sessionTitle: undefined,
     agentPresets: {
       defaultId: 'standard',
       resolve: vi.fn(async (id?: string) => ({ id: id ?? 'standard' })),
@@ -206,6 +208,40 @@ describe('T3: workspacePath persistence + default directory (方案 B)', () => {
     const chat = await registry2.ensureChat('private:10001', '小明')
     expect(captured.createdMeta[0]?.cwd).toBe('/tmp/onebot-ws-f')
     await registry2.stop()
+  })
+})
+
+describe('会话名称（宿主 sessionTitle）', () => {
+  it('names a new chat after the group / friend and never overwrites a user rename', async () => {
+    const calls: Array<{ action: string; params: Record<string, unknown> }> = []
+    const renamed: string[] = []
+    let title = ''
+    const deps = makeRegistryDeps({ agents: makeFakeAgents([], { followups: [] }, { resumeOk: true }) })
+    deps.call = async (action, params) => {
+      calls.push({ action, params })
+      return action === 'get_group_info' ? { group_name: '欠狐的家' } : { nickname: '玉子' }
+    }
+    deps.sessionTitle = () => ({
+      get: () => ({ title }),
+      rename: (_session, next) => {
+        title = next
+        renamed.push(next)
+        return { title: next }
+      },
+    })
+    const registry = new ChatRegistry(deps)
+    await registry.ensureChat('group:980577471', '')
+    await vi.waitFor(() => expect(renamed).toHaveLength(1))
+    expect(renamed[0]).toMatch(/^群 欠狐的家 · \d{2}-\d{2} \d{2}:\d{2}$/)
+    expect(calls[0]).toEqual({ action: 'get_group_info', params: { group_id: 980577471 } })
+
+    // 用户自己起的名字不归插件管：新建的私聊会话保持原名。
+    title = '我自己起的名字'
+    await registry.ensureChat('private:10001', '玉子')
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(renamed).toHaveLength(1)
+
+    await registry.stop()
   })
 })
 

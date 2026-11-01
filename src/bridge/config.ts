@@ -132,6 +132,14 @@ export interface WorkspaceRegistryLike {
   list(): WorkspaceLike[]
 }
 
+/** Session-title service (dsh-session-title): the host session list's names. */
+export interface SessionTitlePort {
+  /** The folded title of one live session; undefined before the first title. */
+  get(session: Session): { title?: string } | undefined
+  /** Pin an explicit title (a `session/title` event with source `user`). */
+  rename(session: Session, title: string): { title: string }
+}
+
 /** Default model service (dsh-agent-default-model): read/save the default selection. */
 export interface AgentDefaultModelLike {
   currentSelection(): ModelSelection | undefined
@@ -184,6 +192,9 @@ export interface BridgeDeps {
    * fallback and preview-less list items. */
   sessionPersistence: SessionPersistenceLike | undefined
   workspaceRegistry: WorkspaceRegistryLike | undefined
+  /** Live lookup of the host's session-title service: the service registers
+   * after the plugin mounts, so it is resolved per use. Absent = no titles. */
+  sessionTitle?: (() => SessionTitlePort | undefined) | undefined
   agentDefaultModel: AgentDefaultModelLike | undefined
   defaultModel: (() => ModelSelection | undefined) | undefined
   config: BridgeConfig & TraceBridgeConfig

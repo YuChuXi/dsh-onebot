@@ -100,6 +100,8 @@ export class ChatBridge {
       sessions: deps.sessions,
       sessionPersistence: deps.sessionPersistence,
       workspaceRegistry: deps.workspaceRegistry,
+      call: (action, params) => deps.connection.call(action, params),
+      sessionTitle: deps.sessionTitle,
       agentPresets: deps.agentPresets,
       defaultModel: deps.defaultModel,
       config: deps.config,

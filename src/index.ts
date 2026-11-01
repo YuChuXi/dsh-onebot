@@ -17,7 +17,7 @@ import type { SessionStore } from '@deepseek-ai/dsh-session'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type Z from '@deepseek-ai/schemastery'
 import type { OneBotEvent } from './onebot/connection.js'
-import type { BridgeDeps, WorkspaceRegistryLike } from './bridge/config.js'
+import type { BridgeDeps, SessionTitlePort, WorkspaceRegistryLike } from './bridge/config.js'
 import type { AccessPolicyConfig } from './chat/index.js'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -426,6 +426,8 @@ export function apply(ctx: Context, config: Config): void {
     commands: ctx.commands as BridgeDeps['commands'],
     sessionPersistence: ctx.sessionPersistence,
     workspaceRegistry: ctx.workspaceRegistry as unknown as WorkspaceRegistryLike,
+    // 会话标题服务可能晚于插件注册：每次取名时现查。
+    sessionTitle: () => ctx.get('sessionTitle') as SessionTitlePort | undefined,
     agentDefaultModel: ctx.agentDefaultModel,
     defaultModel: () => {
       try {
