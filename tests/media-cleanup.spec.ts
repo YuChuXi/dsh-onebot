@@ -44,35 +44,30 @@ describe('MediaStore.cleanupExpired (B3 whitelist)', () => {
     const expiredMedia = join(dir, 'media_1000_abcd1234.jpg')
     const freshMedia = join(dir, 'media_' + Date.now() + '_eeee0000.jpg')
     const mappingFile = join(dir, 'chat-sessions.json')
-    const retiredFile = join(dir, 'retired-sessions.json')
     const mappingSentinel = Buffer.from('{"chat-sessions":"sentinel"}')
-    const retiredSentinel = Buffer.from('[]')
     await writeFile(expiredMedia, 'stale')
     await writeFile(freshMedia, 'fresh')
     await writeFile(mappingFile, mappingSentinel)
-    await writeFile(retiredFile, retiredSentinel)
 
     const expiredSttDir = join(dir, 'stt_abcd1234')
     await mkdir(join(expiredSttDir, 'nested'), { recursive: true })
     await writeFile(join(expiredSttDir, 'audio.wav'), 'wav')
     await writeFile(join(expiredSttDir, 'nested', 'out.txt'), 'txt')
 
-    // Backdate past the 6h TTL — including the state files, reproducing the
+    // Backdate past the 6h TTL — including the state file, reproducing the
     // original bug (idle bot > TTL → any inbound message wiped session state).
     const stale = new Date(Date.now() - 7 * 3600_000)
     await utimes(expiredMedia, stale, stale)
     await utimes(expiredSttDir, stale, stale)
     await utimes(mappingFile, stale, stale)
-    await utimes(retiredFile, stale, stale)
 
     await store.cleanupExpired()
 
     expect((await readdir(dir)).sort()).toEqual(
-      ['chat-sessions.json', basename(freshMedia), 'retired-sessions.json'].sort(),
+      ['chat-sessions.json', basename(freshMedia)].sort(),
     )
     await expect(readFile(freshMedia)).resolves.toEqual(Buffer.from('fresh'))
     await expect(readFile(mappingFile)).resolves.toEqual(mappingSentinel)
-    await expect(readFile(retiredFile)).resolves.toEqual(retiredSentinel)
   })
 })
 
@@ -108,7 +103,6 @@ describe('Transcriber work dir cleanup (B2)', () => {
 describe('Inbound file naming (A4)', () => {
   it('derives a whitelisted extension from the raw name', () => {
     expect(extForInboundName('chat-sessions.json')).toBe('.json')
-    expect(extForInboundName('retired-sessions.json')).toBe('.json')
     expect(extForInboundName('photo.JPG')).toBe('.jpg')
     expect(extForInboundName('archive.tar.gz')).toBe('.gz')
     expect(extForInboundName('../../etc/passwd')).toBe('.bin')
@@ -122,11 +116,9 @@ describe('Inbound file naming (A4)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'inbound-naming-'))
     const store = new MediaStore(dir, 6)
     const mappingSentinel = Buffer.from('{"chat-sessions":"sentinel"}')
-    const retiredSentinel = Buffer.from('[]')
     await writeFile(join(dir, 'chat-sessions.json'), mappingSentinel)
-    await writeFile(join(dir, 'retired-sessions.json'), retiredSentinel)
 
-    for (const name of ['chat-sessions.json', 'retired-sessions.json', '../../etc/passwd', '.hidden', 'no-ext']) {
+    for (const name of ['chat-sessions.json', '../../etc/passwd', '.hidden', 'no-ext']) {
       const payload = Buffer.from('payload of ' + name)
       // Mirror of bridge.ts writeMediaFile: the sender-chosen name only
       // contributes a whitelisted extension; the on-disk name is always a
@@ -140,8 +132,7 @@ describe('Inbound file naming (A4)', () => {
       await expect(readFile(localPath)).resolves.toEqual(payload)
     }
 
-    // The state files must be byte-for-byte intact after all landings.
+    // The state file must be byte-for-byte intact after all landings.
     await expect(readFile(join(dir, 'chat-sessions.json'))).resolves.toEqual(mappingSentinel)
-    await expect(readFile(join(dir, 'retired-sessions.json'))).resolves.toEqual(retiredSentinel)
   })
 })

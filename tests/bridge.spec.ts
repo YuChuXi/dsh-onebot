@@ -30,12 +30,12 @@ describe('ChatBridge', () => {
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(2))
     expect(h.sessionIds).toHaveLength(2)
     expect(h.sessionIds[1]).toMatch(/^onebot-private-10001-[a-z0-9]+$/)
-    // The retirement is durable: retired-sessions.json records the first
-    // session id, so a restart never reuses it.
-    const { readFile } = await import('node:fs/promises')
+    // The retirement is durable: the chat's retired history in
+    // chat-sessions.json records the first session id, so a restart never
+    // reuses it.
     await vi.waitFor(async () => {
-      const retired = JSON.parse(await readFile(join(h.mediaDir, 'retired-sessions.json'), 'utf8')) as string[]
-      expect(retired).toContain('onebot-private-10001')
+      const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8')) as Record<string, { retired: Array<{ id: string }> }>
+      expect(mapping['private:10001'].retired.map(entry => entry.id)).toContain('onebot-private-10001')
     })
     // Restart simulation: a fresh bridge on the same media dir must skip
     // the retired bare id and open the next message on a new suffixed id.

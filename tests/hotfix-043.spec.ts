@@ -8,10 +8,10 @@ import { defaultMediaDir, dshHome } from '../src/index.js'
 import { ChatRegistry } from '../src/registry/index.js'
 
 // Regression tests for the 0.4.3 hotfix pair that pure fakes cannot cover:
-// the dsh-home fallback chain (defect 1) and the retired-sessions save race
-// (defect 2). Rename is gated so the two concurrent writers' renames settle
-// in a chosen order — exactly the interleaving that made the shared `.tmp`
-// name fail with ENOENT (web-3079.log line 14251).
+// the dsh-home fallback chain (defect 1) and the mapping-save race (defect 2).
+// Rename is gated so the two concurrent writers' renames settle in a chosen
+// order — exactly the interleaving that made the shared `.tmp` name fail with
+// ENOENT (web-3079.log line 14251).
 
 const hoisted = vi.hoisted(() => {
   const pending: Array<{ from: string; dest: string; release: () => void }> = []
@@ -49,7 +49,7 @@ describe('hotfix 0.4.3', () => {
     }
   })
 
-  it('two concurrent retired-sessions saves rename their own unique tmp files (no shared-tmp ENOENT race)', async () => {
+  it('two concurrent mapping saves rename their own unique tmp files (no shared-tmp ENOENT race)', async () => {
     const mediaDir = mkdtempSync(join(tmpdir(), 'onebot-test-'))
     const logLines: string[] = []
     const registry = new ChatRegistry({
@@ -69,16 +69,14 @@ describe('hotfix 0.4.3', () => {
       onChatRemoved: () => undefined,
       installChannelScope: () => undefined,
     })
-    const saveRetired = (): Promise<void> => (registry as unknown as { saveRetired(): Promise<void> }).saveRetired()
 
-    registry.retiredSessionIds.add('onebot-private-10001-a')
-    const first = saveRetired()
+    registry.getSettings('private:10001').workspacePath = '/tmp/onebot-ws-hotfix-a'
+    const first = registry.saveMapping()
     await vi.waitFor(() => expect(hoisted.pending.length).toBe(1))
 
-    registry.retiredSessionIds.add('onebot-private-10001-b')
-    const second = saveRetired()
+    registry.getSettings('private:10002').workspacePath = '/tmp/onebot-ws-hotfix-b'
+    const second = registry.saveMapping()
     await vi.waitFor(() => expect(hoisted.pending.length).toBe(2))
-    // The two writers hold gated renames over DISTINCT tmp files.
     // Both writers rename onto the same final file, from DISTINCT tmp files.
     expect(hoisted.pending[0].dest).toBe(hoisted.pending[1].dest)
     expect(hoisted.pending[0].from).not.toBe(hoisted.pending[1].from)
@@ -91,9 +89,9 @@ describe('hotfix 0.4.3', () => {
     hoisted.pending[0].release()
     await first
 
-    expect(logLines.some((line) => line.includes('retired-sessions save failed'))).toBe(false)
+    expect(logLines.some((line) => line.includes('mapping save failed'))).toBe(false)
     // The first writer renamed last, so the durable file holds its snapshot.
-    const final = JSON.parse(await readFile(join(mediaDir, 'retired-sessions.json'), 'utf8')) as string[]
-    expect(final).toEqual(['onebot-private-10001-a'])
+    const final = JSON.parse(await readFile(join(mediaDir, 'chat-sessions.json'), 'utf8')) as Record<string, { workspacePath?: string }>
+    expect(final).toEqual({ 'private:10001': { workspacePath: '/tmp/onebot-ws-hotfix-a', retired: [] } })
   })
 })

@@ -32,8 +32,8 @@ export interface CommandContext {
   getChat(chatId: ChatId): CommandChatView | undefined
   /** /new：销毁会话并退役其 id。 */
   resetChat(chatId: ChatId): Promise<void>
-  /** 无活跃会话时从映射文件读 session id（/session 的当前项）。 */
-  sessionIdFromMapping(chatId: ChatId): Promise<string | undefined>
+  /** 当前绑定的会话 id（live 与 idle 都可用，/session 的当前项）。 */
+  currentSessionId(chatId: ChatId): string | undefined
   /** /session：可切回的历史会话（新→旧）。 */
   switchableSessions(chatId: ChatId): SwitchableSession[]
   /** /session <序号>：切回历史会话。 */
@@ -265,7 +265,7 @@ async function sendModelPickList(ctx: CommandContext, chatId: ChatId, provider: 
 async function handleSessionCommand(ctx: CommandContext, chatId: ChatId, arg: string): Promise<void> {
   if (arg.trim() === '') {
     const list = ctx.switchableSessions(chatId)
-    const current = ctx.getChat(chatId)?.sessionId ?? await ctx.sessionIdFromMapping(chatId)
+    const current = ctx.currentSessionId(chatId)
     if (list.length === 0) {
       await ctx.sendToChat(chatId, '当前 session：' + (current ?? '（未建立会话）') + '\n（该会话没有可切回的历史会话）\n用法：/session <序号> 切回；/new 切换下来的旧会话会进入列表。')
       return

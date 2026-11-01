@@ -281,13 +281,13 @@ only when a workspace already owns that path, never auto-created.
 | Command | Purpose |
 |---|---|
 | `/new` | Start a fresh session (context cleared, old session enters the switchable list) |
-| `/session [number]` | List the switchable historical sessions of this chat (bare form numbered; each entry has a content preview, created and retired timestamps, truncated id; unreadable entries show "(content unreadable)" without affecting the rest). Reply with a number to switch back: the current session retires into the list, the target session is restored with its history (including per-chat settings); you can switch back and forth. The list persists across restarts (switchable-sessions.json, max 20 per chat) |
+| `/session [number]` | List the switchable historical sessions of this chat (bare form numbered; each entry has a content preview, created and retired timestamps, truncated id; unreadable entries show "(content unreadable)" without affecting the rest). Reply with a number to switch back: the current session retires into the list, the target session is restored with its history (including per-chat settings); you can switch back and forth. The list persists across restarts (stored with the chat state in chat-sessions.json, max 20 per chat) |
 | `/model [--default] <provider> <model>` | View/switch the current session's model; `--default` changes the deployment default. The bare form renders a two-level numbered list: reply with a number to pick a provider, then a number to pick the model |
 | `/compact` | Forward the host's context-compaction command (`@deepseek-ai/dsh-command-compact`) to the current session |
 
-The `/session` switchable list persists per chat in the media directory's switchable-sessions.json (same
-read/write discipline as retired-sessions.json: missing file = fresh, corrupted file kept in memory, atomic
-writes; max 20 per chat, deduped, newest first). Each entry renders a content preview (the first real user input
+The `/session` switchable list persists per chat in the media directory's chat-sessions.json, together with
+the chat mapping and per-chat settings (one file, one atomic-write discipline; missing file = fresh,
+corrupted file kept in memory; max 20 per chat, deduped, newest first). Each entry renders a content preview (the first real user input
 of that session's event log: kind 'user' or QQ messages authored by this plugin first, falling back to any
 user/message; all text blocks joined, the QQ inbound `<user_message>` wrapper and trusted prefixes outside the
 join boundary (`[受限用户:仅问答]` / `[HH:MM nickname(QQ)]` — incomplete wrappers or empty bodies fall back

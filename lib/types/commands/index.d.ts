@@ -26,8 +26,8 @@ export interface CommandContext {
     getChat(chatId: ChatId): CommandChatView | undefined;
     /** /new：销毁会话并退役其 id。 */
     resetChat(chatId: ChatId): Promise<void>;
-    /** 无活跃会话时从映射文件读 session id（/session 的当前项）。 */
-    sessionIdFromMapping(chatId: ChatId): Promise<string | undefined>;
+    /** 当前绑定的会话 id（live 与 idle 都可用，/session 的当前项）。 */
+    currentSessionId(chatId: ChatId): string | undefined;
     /** /session：可切回的历史会话（新→旧）。 */
     switchableSessions(chatId: ChatId): SwitchableSession[];
     /** /session <序号>：切回历史会话。 */

@@ -116,7 +116,7 @@ describe('ChatRegistry', () => {
     await vi.waitFor(() => expect(captured.followups).toHaveLength(1))
     await bridge.stop()
     const mapping = JSON.parse(await readFile(join(mediaDir, 'chat-sessions.json'), 'utf8'))
-    expect(mapping['private:10001']).toBe(sessionIds[0])
+    expect(mapping['private:10001'].session).toBe(sessionIds[0])
     await connection.stop()
   })
 
@@ -129,15 +129,12 @@ describe('ChatRegistry', () => {
     const fallback = h.sessionIds[1]
     expect(fallback).toMatch(/^onebot-private-10001-[a-z0-9]+$/)
     expect(h.captured.followups[0].sessionId).toBe(fallback)
-    // The mapping persists the REAL session id (not the attempted bare one).
+    // The mapping persists the REAL session id (not the attempted bare one),
+    // and the colliding id is retired durably in the same entry.
     await vi.waitFor(async () => {
       const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8'))
-      expect(mapping['private:10001']).toBe(fallback)
-    })
-    // The colliding id is retired durably.
-    await vi.waitFor(async () => {
-      const retired = JSON.parse(await readFile(join(h.mediaDir, 'retired-sessions.json'), 'utf8')) as string[]
-      expect(retired).toContain('onebot-private-10001')
+      expect(mapping['private:10001'].session).toBe(fallback)
+      expect(mapping['private:10001'].retired.map((entry: { id: string }) => entry.id)).toContain('onebot-private-10001')
     })
     // Session events route to the chat through the REAL id: the model's tool
     // send targets the chat explicitly (sessionIds[0] is the failed attempt).
@@ -169,15 +166,12 @@ describe('ChatRegistry', () => {
     await vi.waitFor(() => {
       expect(h.outbound.some(f => f.action === 'send_msg' && JSON.stringify(f.params).includes('运行出错'))).toBe(true)
     })
-    // The colliding id lands in retired-sessions.json and the chat mapping
-    // is emptied (the next message will rebuild on a fresh id).
-    await vi.waitFor(async () => {
-      const retired = JSON.parse(await readFile(join(h.mediaDir, 'retired-sessions.json'), 'utf8')) as string[]
-      expect(retired).toContain(sessionId)
-    })
+    // The colliding id lands in the chat's retired history and the binding
+    // is cleared (the next message will rebuild on a fresh id).
     await vi.waitFor(async () => {
       const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8'))
-      expect(Object.keys(mapping)).toHaveLength(0)
+      expect(mapping['private:10001'].session).toBeUndefined()
+      expect(mapping['private:10001'].retired.map((entry: { id: string }) => entry.id)).toContain(sessionId)
     })
     h.client.close()
     await h.bridge.stop()
@@ -472,7 +466,7 @@ describe('ChatRegistry', () => {
     expect(stat).toHaveBeenCalled()
     expect(sessionIds[0]).toMatch(/^onebot-private-10001-[a-z0-9]+$/)
     expect(sessionIds[0]).not.toBe('onebot-private-10001')
-    const retired = registryOf({ bridge }).retiredSessionIds
+    const retired = (registryOf({ bridge }) as unknown as { retiredIds: Set<string> }).retiredIds
     expect(retired).toContain('onebot-private-10001')
     await bridge.stop()
   })
@@ -525,16 +519,16 @@ describe('ChatRegistry', () => {
     // rebuild it on a colliding id.
     expect(String(chat.sessionId)).toBe('onebot-private-10001')
     await (bridge as unknown as { resetChat(chatId: string): Promise<void> }).resetChat('private:10001')
-    const retired = registry.retiredSessionIds
+    const retired = (registry as unknown as { retiredIds: Set<string> }).retiredIds
     expect(retired).toContain('onebot-private-10001')
     await bridge.stop()
   })
 
-  it('loadRetired keeps the current set on a corrupt file and saves atomically', async () => {
-    await vi.waitFor(() => expect(1).toBe(1))
+  it('migrates the legacy mapping when the old retired file is corrupt and writes atomically', async () => {
     const ctx = new Context()
     const mediaDir = mkdtempSync(join(tmpdir(), 'onebot-test-'))
     await mkdir(mediaDir, { recursive: true })
+    await writeFile(join(mediaDir, 'chat-sessions.json'), JSON.stringify({ 'private:10001': { workspacePath: mediaDir } }), 'utf8')
     await writeFile(join(mediaDir, 'retired-sessions.json'), '{not json', 'utf8')
     const logLines: string[] = []
     const bridge = new ChatBridge({
@@ -564,31 +558,15 @@ describe('ChatRegistry', () => {
       log: (level, message) => { logLines.push(level + ': ' + message) },
     })
     const registry = registryOf({ bridge })
-    await registry.loadRetired()
-    const logLinesSnapshot = [...logLines]
-    const retiredIds = registry.retiredSessionIds
-    const retiredSnapshot = [...retiredIds]
-    // Corrupt JSON must NOT be treated as an empty retired set (the 2026-08-17
-    // regression): the load warns, keeps the in-memory array, and later saves
-    // atomically (temp + rename, no half-written file).
-    // (Assertions run inside waitFor: vitest 3.2.7's matcher state is only
-    // reliably re-bound inside its polling/async callbacks.)
-    await vi.waitFor(() => {
-      expect(logLinesSnapshot.some(line => line.startsWith('warn') && line.includes('unparsable'))).toBe(true)
-      expect(JSON.stringify(retiredSnapshot)).toBe('[]')
-    })
-    // Atomic save: retire one id, then the file holds exactly it and no .tmp.
-    // (Leading `;` guards against ASI joining this line onto the waitFor
-    // statement above — the result would be waitFor(cb)(...) called.)
-    ;(registry as unknown as { retireSession(id: string): void }).retireSession('onebot-private-10001')
-    await vi.waitFor(async () => {
-      const content = await readFile(join(mediaDir, 'retired-sessions.json'), 'utf8')
-      expect(content).toContain('onebot-private-10001')
-    })
+    await registry.loadMapping()
+    // A corrupt legacy file only warns; the migration still rewrites the
+    // single mapping file atomically (temp + rename, no leftover .tmp).
+    expect(logLines.some(line => line.startsWith('warn') && line.includes('unparsable'))).toBe(true)
+    const mapping = JSON.parse(await readFile(join(mediaDir, 'chat-sessions.json'), 'utf8'))
+    expect(mapping['private:10001'].retired).toEqual([])
+    expect(mapping['private:10001'].workspacePath).toBe(mediaDir)
     const files = await readdir(mediaDir)
-    await vi.waitFor(() => {
-      expect(files.some(f => f.endsWith('.tmp'))).toBe(false)
-    })
+    expect(files.some(f => f.endsWith('.tmp'))).toBe(false)
     await bridge.stop()
   })
 
@@ -645,7 +623,7 @@ describe('ChatRegistry', () => {
     expect(saveWrites).toBe(1)
     await vi.waitFor(async () => {
       const content = await readFile(join(mediaDir, 'chat-sessions.json'), 'utf8')
-      expect(JSON.parse(content)).toEqual({ 'private:10001': sessionIds[0] })
+      expect(JSON.parse(content)).toEqual({ 'private:10001': { session: sessionIds[0], retired: [] } })
     })
     // A flush right before stop() must not wait for the debounce timer:
     // stop() cancels it and forces the final save immediately.
@@ -828,8 +806,8 @@ describe('ChatRegistry', () => {
     h.client.close()
     await h.bridge.stop()
     await h.connection.stop()
-    const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8')) as Record<string, string>
-    const recordedSessionId = mapping['private:10001']
+    const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8')) as Record<string, { session?: string }>
+    const recordedSessionId = mapping['private:10001'].session
     expect(recordedSessionId).toBe(h.sessionIds[0])
 
     const resume = vi.fn(async (options: { resumeSessionId: string; agentOptions?: { provider?: string; model?: string }; setup?: (agentCtx: unknown) => unknown }) => {
@@ -905,41 +883,38 @@ describe('ChatRegistry', () => {
       expect(h.outbound.some(f => f.action === 'send_msg' && JSON.stringify(f.params).includes('运行出错'))).toBe(true)
     })
     await vi.waitFor(async () => {
-      const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8')) as Record<string, string>
-      expect(Object.keys(mapping)).toHaveLength(0)
+      const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8'))
+      expect(mapping['private:10001'].session).toBeUndefined()
+      expect(mapping['private:10001'].retired.map((entry: { id: string }) => entry.id)).toContain(oldSessionId)
     })
     // The next message rebuilds the chat on a fresh suffixed id and repopulates
-    // the mapping with the truth.
+    // the binding with the truth.
     h.sendText('再来一条')
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(2))
     const rebuiltSessionId = h.captured.followups[1].sessionId
     expect(rebuiltSessionId).not.toBe(oldSessionId)
     expect(rebuiltSessionId).toMatch(/^onebot-private-10001-[a-z0-9]+$/)
     await vi.waitFor(async () => {
-      const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8')) as Record<string, string>
-      expect(mapping['private:10001']).toBe(rebuiltSessionId)
+      const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8'))
+      expect(mapping['private:10001'].session).toBe(rebuiltSessionId)
+      expect(mapping['private:10001'].retired.map((entry: { id: string }) => entry.id)).toContain(oldSessionId)
     })
-    const retired = JSON.parse(await readFile(join(h.mediaDir, 'retired-sessions.json'), 'utf8')) as string[]
-    expect(retired).toContain(oldSessionId)
     h.client.close()
     await h.bridge.stop()
     await h.connection.stop()
   }, 30_000)
 
-  it('per-chat settings survive /new: workspace, preset, watermark (D1-PR3)', async () => {
+  it('per-chat settings survive /new: workspace and watermark (D1-PR3)', async () => {
     const h = await makeCmdHarness()
     const registry = registryOf(h)
     const settings = (): ChatSettings => registry.getSettings('private:10001')
     settings().workspacePath = '/ws/dir'
-    settings().presetOverride = 'minimal'
     settings().recentWatermark = { time: 1_760_000_000, id: '5001' }
     h.sendText('/new')
     await vi.waitFor(() => expect(h.outbound.some(f => JSON.stringify(f.params).includes('已开启新会话'))).toBe(true))
     // /new retires the session but never clears the settings entry — every
-    // field keeps its value for the NEXT session of this chat (pre-PR3 maps
-    // semantics, kept verbatim).
+    // field keeps its value for the NEXT session of this chat.
     expect(settings().workspacePath).toBe('/ws/dir')
-    expect(settings().presetOverride).toBe('minimal')
     expect(settings().recentWatermark).toEqual({ time: 1_760_000_000, id: '5001' })
 
     h.client.close()
@@ -1004,11 +979,11 @@ describe('ChatRegistry', () => {
     // resume, not a second create: the session id list holds the id twice.
     expect(h.sessionIds).toEqual([sessionId, sessionId])
     expect(registry.chats.get('private:10001')!.agent).not.toBe(chat.agent)
-    // The chat→session mapping survived eviction (NOT retired) — the file is
-    // still the resume source and no retired record was written.
-    const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8')) as Record<string, string>
-    expect(mapping['private:10001']).toBe(sessionId)
-    await expect(readFile(join(h.mediaDir, 'retired-sessions.json'), 'utf8')).rejects.toThrow()
+    // The chat→session binding survived eviction (NOT retired) — the file is
+    // still the resume source and the history stays empty.
+    const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8'))
+    expect(mapping['private:10001'].session).toBe(sessionId)
+    expect(mapping['private:10001'].retired).toEqual([])
     h.client.close()
     await h.bridge.stop()
     await h.connection.stop()

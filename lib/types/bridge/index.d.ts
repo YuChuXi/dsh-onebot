@@ -205,8 +205,6 @@ export declare class ChatBridge {
      * 每次调用实时解析（模型目录必须走活服务）。
      */
     private get commandCtx();
-    /** Read the chat→session mapping file (/session's current item). */
-    private sessionIdFromMapping;
     /** M3-D4c: steer a completed voice transcript into the chat's agent — the
      * running turn consumes it at its nearest step boundary; an idle agent
      * opens a turn. No live chat (dispatch dropped/never happened) drops it. */
@@ -266,7 +264,6 @@ export declare class ChatBridge {
     /** Get (or create) the agent for a chat. */
     private ensureChat;
     private effectiveCwd;
-    private resolvePresetId;
     private saveMappingDebounced;
     private healSessionCollision;
     /**

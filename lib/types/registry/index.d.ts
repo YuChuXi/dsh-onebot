@@ -1,14 +1,14 @@
 /**
- * The chat↔session registry (M2-D1-PR3): one live ChatAgent per QQ chat with
- * the chats/bySession dual index, session-id minting and retirement
- * (brokenSessions + the durable retired-sessions.json record), the per-chat
- * switchable-session list (switchable-sessions.json, the /session switch-back
- * history), the chat-sessions.json mapping persistence (save + debounced flush
- * + restart resume), the per-chat settings that survive /new, and the shared
- * create/resume assembly (C2) behind ensureChat/loadMapping. Extracted from
- * bridge.ts — persistence formats, retirement semantics and assembly
- * behavior are unchanged; the bridge keeps same-name facades so the command
- * table, the outbound pipeline and the session-event links keep working.
+ * 会话注册表：每个 QQ 会话绑定一个 dsh 会话，绑定状态收敛在单一 `ChatState`。
+ *
+ * 一个 chat 的绑定只有两种运行时形态（live / idle）与一层历史：
+ * - live：`chats` 里有 agent，`bySession` 反向路由宿主会话事件；
+ * - idle：agent 已释放，`state.sessionId` 仍记录绑定，下一条消息恢复；
+ * - `state.retired` 记录已退役的会话 id（`kept` = 历史完好、/session 可切回）。
+ *
+ * 持久化只有 `chat-sessions.json` 一份：映射、每 chat 设置与退役历史都在
+ * `ChatState` 里，不再维护独立的退役 / 可切回文件。`retiredIds` 是
+ * `retired` 的派生索引，只用于 O(1) 的 id 复用判定。
  * @module dsh-onebot/registry
  */
 import type { Agent, AgentRegistry, ModelSelection } from '@deepseek-ai/dsh-agent';
@@ -16,12 +16,27 @@ import type { SessionId, SessionStore } from '@deepseek-ai/dsh-session';
 import type { Context } from '@deepseek-ai/cordis';
 import type { ChatId, UserRole } from '../chat/index.js';
 import type { AgentPresetsLike, BridgeConfig, SessionPersistenceLike, SessionTitlePort, WorkspaceRegistryLike } from '../bridge/config.js';
-/** One switchable (retired-but-intact) session of a chat: /new, /workspace and
- * /preset switches retire the live session with its history intact — /session
- * can switch the chat back to it. Newest first, deduped, capped per chat. */
+/** `/session` 列表的一项：一个历史完好、可切回的退役会话。 */
 export interface SwitchableSession {
     id: string;
     retiredAt: number;
+}
+/** 一个已退役的会话 id。`kept` 表示历史完好、/session 可以切回；
+ * 所有条目（含 kept=false）都阻止该 id 被再次创建。 */
+export interface RetiredSession {
+    id: string;
+    retiredAt: number;
+    kept: boolean;
+}
+/** 一个 chat 的绑定状态：当前会话、跨会话保留的设置、已退役历史。
+ * 这是会话管理的唯一状态来源；live 与否由 `chats` 是否存在 agent 决定。 */
+export interface ChatState {
+    /** 当前绑定的会话 id；缺省表示下一条消息将新建会话。 */
+    sessionId?: string;
+    /** 每 chat 设置：跨 /new、驱逐与碰撞修复保留。 */
+    settings: ChatSettings;
+    /** 已退役会话，按 retiredAt 倒序。 */
+    retired: RetiredSession[];
 }
 /** The outcome of a /session switch attempt (the command layer phrases the
  * user-facing reply from `reason`; `message` carries the resume error text). */
@@ -54,22 +69,17 @@ export interface PendingSelection {
     }>;
     createdAt: number;
 }
-/** Per-chat settings that survive /new and collision heals (M2-D1-PR3):
- * resetChat and healSessionCollision never clear the entry, so every field
- * below keeps its value across session resets — exactly the pre-PR3 map
- * semantics. The entry is removed only by idle eviction (B8c). */
+/** 每 chat 设置：全部字段跨会话重建保留（/new、驱逐、碰撞修复都不清除），
+ * 只有 pendingSelection 是惰性过期的界面状态、从不持久化。 */
 export interface ChatSettings {
-    /** /workspace override (survives /new, so the next agent for the chat is
-     * created under the new directory). */
+    /** 每 chat 的 workspace 覆盖；下一次为它创建会话时生效。 */
     workspacePath?: string;
-    /** /preset override (survives /new resets). */
-    presetOverride?: string;
     /** R2: pending serial-number selection snapshot (see PendingSelection);
      * ephemeral UI state — survives /new like every field here but never
      * persisted, and bounded by the lazy 5-minute TTL instead. */
     pendingSelection?: PendingSelection;
     /** 上文水位：上一次注入给模型的最后一条消息（`{ time, id }`）。
-     * 随会话映射落盘，重启、驱逐、换会话都不丢；窗口据此只注入新内容。 */
+     * 随会话映射持久化存储，重启、驱逐、换会话都不丢；窗口据此只注入新内容。 */
     recentWatermark?: RecentWatermark;
 }
 /** 上文水位的持久化形态：秒级时间戳 + message_id。 */
@@ -132,8 +142,8 @@ export interface RegistryDeps {
     /** Bridge stop flag (guards the resume loop). */
     isStopping(): boolean;
     /** Bridge-owned chat runtime teardown when a chat leaves the registry:
-     * stop the typing indicator. Chat settings are dropped by the registry
-     * itself (snapshotted into the persisted-settings carrier first). */
+     * stop the typing indicator. The chat's `ChatState` stays in the registry
+     * (settings and retirement history survive the release). */
     onChatRemoved(chat: ChatAgent): void;
     /** Register the QQ platform prompt section + qq_* tools on a new agent's
      * own scope — bridge-owned because the tools call back into the bridge.
@@ -151,26 +161,53 @@ export declare class ChatRegistry {
     readonly chats: Map<string, ChatAgent>;
     /** Reverse index: session id → chat id (routes session events to chats). */
     readonly bySession: Map<string, string>;
-    /** Per-chat settings (workspace/preset/watermark), lazy-created. */
-    private readonly chatSettings;
+    /** 每 chat 的绑定状态；live 与 idle 的会话都记录在这里，是唯一状态源。 */
+    private readonly states;
+    /** `states[].retired[].id` 的派生索引：判断一个会话 id 是否永久退役。 */
+    private readonly retiredIds;
     /** 会话 id → QQ 侧的显示名（群名 / 昵称），取到就缓存。 */
     private readonly displayNames;
-    /** Session ids whose persisted logs are unusable (collision heals, failed
-     * resumes, create collisions); creates must avoid them. Deliberately kept
-     * apart from retiredSessionIds: /session's soft-retired (switchable) ids
-     * land in retiredSessionIds only, so they stay switch-back targets. */
-    private readonly brokenSessions;
-    /** Session ids retired across restarts (durable copy in retired-sessions.json):
-     * both the broken ones and the soft-retired /session switchables. */
-    retiredSessionIds: Set<string>;
-    /** Per-chat switchable retired sessions (/session history), newest first. */
-    private switchableByChat;
     private mappingSaveTimer;
     /** Resolves once the on-disk chat mapping has been loaded (wired by the bridge's start()). */
     mappingLoaded: Promise<void>;
     constructor(deps: RegistryDeps);
+    /**
+     * 取一个 chat 的绑定状态，缺省时建立空状态。
+     *
+     * Args:
+     *   chatId (ChatId): 会话 id。
+     *
+     * Returns:
+     *   ChatState: 该 chat 的状态对象（调用方持有引用，可原地修改）。
+     *
+     * Callers:
+     *   - `getSettings`、`createChat`、`loadMapping` 等注册表内部方法。
+     */
+    private stateOf;
     /** The (lazy-created) settings entry for one chat. */
     getSettings(chatId: ChatId): ChatSettings;
+    /** 该会话 id 是否已退役（任何状态下的退役都阻止再次创建）。 */
+    private isRetired;
+    /**
+     * 把一个会话 id 记入该 chat 的退役历史。
+     *
+     * Args:
+     *   chatId (ChatId): 会话所属 chat。
+     *   id (string): 要退役的会话 id。
+     *   kept (boolean): true = 历史完好，/session 可切回；false = 不可切回。
+     *   retiredAt (number): 退役时间；缺省为当前时刻，迁移时传旧记录值。
+     *
+     * Returns:
+     *   void: 无。
+     *
+     * Callers:
+     *   - `createChat`、`resetChat`、`switchSession`、`healSessionCollision`、`adoptLegacyMapping`。
+     */
+    private retire;
+    /** kept 条目超过上限时，把最旧的可切回项降级为不可切回（仍阻止复用）。 */
+    private capSwitchable;
+    /** 一个会话重新成为当前绑定时，从退役历史里移除。 */
+    private unretire;
     /** C2: default-model wiring shared by the create and resume assembly paths
      * — the agent options for the registry call only (the deployment default
      * rides in as `provider`/`model`; dsh 0.2.2 carries the mutable selection
@@ -189,16 +226,8 @@ export declare class ChatRegistry {
      * the M2-C2 characterization tests in bridge.spec.ts. */
     private createChatAgent;
     /** B8a: in-flight creates keyed by chat id — concurrent first messages for
-     * one chat join a single create instead of racing (pre-B8a, two dispatches
-     * could both pass the empty-map check and agents.create ran twice with the
-     * same derived session id; the second chats.set won and the first agent
-     * leaked). */
+     * one chat join a single create instead of racing. */
     private readonly pendingCreates;
-    /** B8c: chats evicted for idleness, kept resumable (chat id → last session
-     * id plus the D4b persisted-settings snapshot, since chatSettings is cleared
-     * on eviction). NOT retired: saveMapping keeps writing them, so the mapping
-     * file never drops an evicted chat and a later message resumes its session. */
-    private readonly evictedChats;
     /** Get (or create) the agent for a chat. */
     ensureChat(chatId: ChatId, nickname: string): Promise<ChatAgent>;
     private createChat;
@@ -245,98 +274,131 @@ export declare class ChatRegistry {
      *   - `createChat`、`resumeChat`。
      */
     private applySessionTitle;
-    /** T3: apply the persisted-settings snapshot (workspace override, watermark)
-     * of an evicted or reset chat onto its settings entry — shared by the
-     * evicted-resume path and its retired-session fast path. */
-    private restoreEvictedSettings;
-    /** Resume persisted chats from the mapping file (best-effort). */
+    /**
+     * 从映射文件恢复所有 idle 会话；旧格式在这里一次性迁移成新格式。
+     *
+     * 迁移只发生在旧文件存在时：读取旧映射、旧可切回列表与旧全局退役列表，
+     * 合并成 `ChatState` 后立即以新格式重写，旧文件之后不再读取。
+     *
+     * Args:
+     *   无。
+     *
+     * Returns:
+     *   Promise<void>: 完成（映射缺失或损坏时以空状态继续）。
+     *
+     * Callers:
+     *   - `src/bridge/index.ts:start`（ready 链）。
+     */
     loadMapping(): Promise<void>;
-    /** Resume one persisted chat from its recorded session id (shared by
-     * loadMapping and the B8c evicted-chat resume). */
+    /** 把持久化条目写入内存状态（新格式）。 */
+    private adoptMapping;
+    /**
+     * 一次性迁移旧版三文件格式。
+     *
+     * Args:
+     *   mapping (Record<string, unknown>): 旧映射（字符串或 `{ session, … }`）。
+     *
+     * Returns:
+     *   Promise<void>: 迁移完成并以新格式重写映射文件。
+     *
+     * Callers:
+     *   - `loadMapping`（仅当文件仍是旧格式时）。
+     */
+    private adoptLegacyMapping;
+    /** 读取旧格式 JSON；缺失或损坏时记录日志并返回 undefined（迁移只用一次）。 */
+    private readLegacyJson;
+    /** 把持久化的 workspace 覆盖与水位写进状态（新格式与迁移共用）。 */
+    private adoptSettings;
+    /** Resume one persisted chat from its recorded session id. */
     private resumeChat;
+    private mediaPath;
     private mappingPath;
-    /** T3 (hole C): make a just-set /workspace override durable even when the
-     * chat is not live (before its first message, or after a failed resume).
-     * saveMapping covers chats/evictedChats plus (T3-R2) a settings-only
-     * fallback, so the settings survive either way — the snapshot still pins
-     * the chat's real mapping session id over the derived bare id. Snapshots
-     * the chat into evictedChats under its mapping session id — or the derived bare id
-     * when the chat never went live (the resume then fails harmlessly and a
-     * fresh session is created with the settings intact). No-op for a live
-     * chat: the normal save path covers it. */
-    noteWorkspaceOverride(chatId: ChatId): void;
+    /**
+     * 把全部 chat 状态写回映射文件（临时文件 + rename 原子替换）。
+     * 空状态（无当前会话、无设置、无退役历史）不写占位条目。
+     *
+     * Args:
+     *   无。
+     *
+     * Returns:
+     *   Promise<void>: 完成（写失败只记日志）。
+     *
+     * Callers:
+     *   - `createChat`、`loadMapping`、`saveMappingDebounced`、`stop` 等。
+     */
     saveMapping(): Promise<void>;
     saveMappingDebounced(): void;
     /** B8c: dispose chats whose last activity is older than chatIdleEvictDays
      * (0 disables; default 7). Called before each inbound message: the session
      * is flushed, the agent disposed, and the chat removed from
-     * chats/bySession/settings — NOT retired, the mapping keeps the pair so a
+     * chats/bySession — NOT retired, `state.sessionId` keeps the pair so a
      * later message (or a restart) resumes the same session. */
     sweepIdleChats(): Promise<void>;
+    /**
+     * 把会话转入 idle：先 flush 保证可恢复，再释放 agent 并移除 live 索引；
+     * `state.sessionId` 保留，下一条消息按记录恢复。
+     *
+     * Args:
+     *   chatId (ChatId): 会话 id。
+     *   chat (ChatAgent): 活跃 agent。
+     *
+     * Returns:
+     *   Promise<void>: 完成；flush 失败时保留活跃会话，等下次消息再试。
+     *
+     * Callers:
+     *   - `sweepIdleChats`。
+     */
     private evictChat;
-    /** Whether a session id must never be created again (this run or on disk). */
-    private isSessionIdBlocked;
-    /** A suffixed session id for a chat that avoids every blocked id. */
+    /** A suffixed session id for a chat that avoids every retired id. */
     private freshSessionId;
-    /** Permanently retire a session id: in-memory plus durable on-disk record,
-     * so a restart never reuses an id whose log collides with a fresh session. */
-    private retireSession;
     /** Whether the persistence layer already owns a durable log for this id —
      * true means reusing the id would collide (stale on-disk log or live entry).
      * A read failure counts as no log so the caller falls back to the normal
      * path rather than blocking an id on a transient error. */
     private hasPersistedLog;
-    private retiredPath;
-    loadRetired(): Promise<void>;
-    private saveRetired;
-    private switchablePath;
-    /** Load the per-chat switchable lists from disk (same discipline as
-     * loadRetired: only a missing file means "fresh start"; a read failure or
-     * corrupt JSON keeps the current in-memory lists so a later save never
-     * obliterates them). */
-    loadSwitchable(): Promise<void>;
-    /** Atomic write of the switchable lists (temp + rename, like saveRetired). */
-    private saveSwitchable;
-    /** The chat's switchable retired sessions (a copy; newest first). */
-    switchableSessions(chatId: ChatId): SwitchableSession[];
-    /** Record a just-soft-retired session as switchable for its chat: dedupe by
-     * id (a later re-retire refreshes retiredAt and moves it to the front),
-     * newest first, capped per chat. */
-    private recordSwitchable;
-    private removeSwitchable;
-    /** /session switch success: the target session is live again — lift the
-     * retired mark (in-memory plus the durable file) so the NORMAL resume paths
-     * (restart loadMapping, idle-evict re-activation) keep finding it. The
-     * create paths stay protected without the mark: hasPersistedLog catches the
-     * target's own log and the create-collision fallback covers the rest. */
-    private unRetireSession;
     /**
-     * /session <序号>: switch a chat back to one of its switchable (soft-retired)
-     * sessions. Validation is per-chat (chat A's history is invisible to chat
-     * B) and refuses broken ids. With a live chat the current session is
-     * soft-retired into the list first (the retire half of resetChat — the
-     * settings carrier included — so a failed resume still rebuilds cleanly);
-     * with no live chat the switch is carried through evictedChats like
-     * noteWorkspaceOverride. On success the target is un-retired and leaves the
-     * list (it is the current session); on resume failure the target is
-     * hard-retired, dropped from the list, and the chat falls back to a fresh
-     * session on its next message — it never gets stuck.
+     * 该 chat 的可切回历史会话（新→旧）。
+     *
+     * Args:
+     *   chatId (ChatId): 会话 id。
+     *
+     * Returns:
+     *   SwitchableSession[]: 历史完好的退役会话副本。
+     *
+     * Callers:
+     *   - `src/bridge/index.ts` 命令上下文（/session 列表）。
+     */
+    switchableSessions(chatId: ChatId): SwitchableSession[];
+    /**
+     * /session <序号>: 把 chat 切回历史里一个 kept 的退役会话。
+     *
+     * 校验按 chat 隔离（别的 chat 的历史不可见）；有活跃会话时先把当前会话
+     * 软退役进历史，再恢复目标；成功后目标从历史移除、成为当前绑定。
+     * 恢复失败则把目标降级为不可切回、清空当前绑定，下一条消息新建会话。
+     *
+     * Args:
+     *   chatId (ChatId): 会话 id。
+     *   targetSessionId (string): 目标会话 id。
+     *
+     * Returns:
+     *   Promise<SessionSwitchOutcome>: 切换结果；失败带原因。
+     *
+     * Callers:
+     *   - `src/bridge/index.ts` 命令上下文（/session <序号>）。
      */
     switchSession(chatId: ChatId, targetSessionId: string): Promise<SessionSwitchOutcome>;
-    /** T3-R1 (review closure): carry the chat's persisted settings across a
-     * reset or a collision heal — snapshot them into evictedChats under the
-     * (about-to-be-retired) session id, so the trailing saveMapping keeps the
-     * entry instead of dropping the chat's workspace/watermark on a restart.
-     * Only persisted fields trigger the snapshot (a plain /new or heal keeps
-     * the exact pre-T3 on-disk behavior: entry dropped); the recorded session
-     * id is retired by the caller, so the carrier is never resumed. Shared by
-     * resetChat and healSessionCollision — logic frozen to the original
-     * resetChat inline snapshot. */
-    private snapshotRetainedSettings;
     /**
-     * Recover from a session-log collision: the live session cannot append to
-     * the mismatched on-disk log, so dispose the agent and rebuild the chat on
-     * a fresh session id. The user is asked to resend.
+     * 会话日志与磁盘不一致时重建：当前与裸 id 都记入退役历史，释放 agent；
+     * 下一条消息新建会话。
+     *
+     * Args:
+     *   chatId (ChatId): 会话 id。
+     *
+     * Returns:
+     *   Promise<void>: 完成。
+     *
+     * Callers:
+     *   - `src/bridge/index.ts:onSessionEvent`（turn/end 的错误匹配）。
      */
     healSessionCollision(chatId: ChatId): Promise<void>;
     /**
@@ -346,13 +408,19 @@ export declare class ChatRegistry {
      */
     effectiveCwd(chatId?: ChatId): string;
     /**
-     * The preset id a NEW session records and joins: the configured id when set,
-     * else the deployment default — the same resolution the Web surface applies,
-     * so cross-channel sessions carry the same header fact. A roster that cannot
-     * resolve the effective id leaves the header bare and the session uncomposed,
-     * exactly like a failed mount.
+     * 新会话记录并加入的预设 id：配置优先，否则取部署默认；
+     * 与 Web 界面使用同一解析，跨渠道会话的 header 因此一致。
+     *
+     * Args:
+     *   无。
+     *
+     * Returns:
+     *   Promise<string | undefined>: 有效预设 id；预设服务缺失或解析失败时 undefined。
+     *
+     * Callers:
+     *   - `createChat`（写入新会话的 header meta）。
      */
-    resolvePresetId(chatId: ChatId): Promise<string | undefined>;
+    private resolvePresetId;
     /**
      * The preset id a persisted session recorded for itself (newest logged
      * selection wins, else the creation header), or undefined when it recorded
@@ -384,14 +452,39 @@ export declare class ChatRegistry {
      */
     private attachToWorkspace;
     /**
-     * /new: dispose the current chat agent and retire its session id, so the
-     * next inbound message creates a brand-new session (fresh history; the old
-     * conversation stays on disk). The chat's settings (workspace/preset/
-     * watermark) all survive — they key the NEXT session of this chat.
+     * /new：释放当前 agent，把当前会话软退役进历史，清空绑定；
+     * 下一条消息新建会话，旧对话留在 `/session` 可切回列表里。
+     *
+     * live 与 idle 的绑定都按同一语义退役：idle 会话同样从历史里可见，
+     * 不清空绑定的话下一条消息会恢复旧会话。
+     *
+     * 裸 id 与当前会话不同、且尚未记入历史时额外记为不可切回：它的磁盘日志
+     * 会与未来的裸 id 会话碰撞。已在历史里的裸 id 保持原状态（仍是可切回项）。
+     * 设置对象原样保留，继续作用于此 chat 的下一个会话。
+     *
+     * Args:
+     *   chatId (ChatId): 会话 id。
+     *
+     * Returns:
+     *   Promise<void>: 完成（无绑定时只写回映射）。
+     *
+     * Callers:
+     *   - `src/bridge/index.ts:resetChat`（/new 命令）。
      */
     resetChat(chatId: ChatId): Promise<void>;
-    /** Read the chat→session mapping file (for /id and /status when no live chat). */
-    sessionIdFromMapping(chatId: ChatId): Promise<string | undefined>;
+    /**
+     * 该 chat 当前绑定的会话 id：live 与 idle 都记录在 `ChatState`，未绑定时 undefined。
+     *
+     * Args:
+     *   chatId (ChatId): 会话 id。
+     *
+     * Returns:
+     *   string | undefined: 当前绑定的会话 id。
+     *
+     * Callers:
+     *   - `src/bridge/index.ts` 命令上下文（/session 的当前项）。
+     */
+    currentSessionId(chatId: ChatId): string | undefined;
     /** Stop everything registry-owned: cancel the debounce timer, save the
      * mapping, dispose every agent, clear both indexes. */
     stop(): Promise<void>;

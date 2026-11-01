@@ -1,11 +1,9 @@
 /**
- * /session switchable-history tests (M5): the per-chat switchable-session list
- * (switchable-sessions.json), the soft-retire split in resetChat, and the
- * switchSession flow behind the /session command. Pins the end-to-end contract
- * "/new → /session 1 → the next plain message continues the ORIGINAL session
- * via agents.resume (not a fresh create)", the restart round-trip, the
- * broken-id refusal, and the resume-failure fallback. Registry-internal paths
- * are exercised through direct calls (same convention as registry.spec).
+ * /session 切换历史的测试（M5）：`ChatState.retired` 与 `kept` 的语义、
+ * /new 的软退役、switchSession 流程，以及端到端契约
+ * "/new → /session 1 → 下一条普通消息通过 agents.resume 继续原会话（而非新建）"、
+ * 重启往返、kept=false 的拒绝与恢复失败回退。Registry 内部路径沿用
+ * registry.spec 的直调约定。
  * @module dsh-onebot/tests/session-switch
  */
 import { describe, expect, it, vi } from 'vitest'
@@ -30,12 +28,14 @@ function registryOf(h: { bridge: unknown }): ChatRegistry {
   return (h.bridge as unknown as { registry: ChatRegistry }).registry
 }
 
-function brokenOf(r: ChatRegistry): Set<string> {
-  return (r as unknown as { brokenSessions: Set<string> }).brokenSessions
+/** 私有退役索引：测试用来观察某个 id 是否已被永久退役。 */
+function retiredIdsOf(r: ChatRegistry): Set<string> {
+  return (r as unknown as { retiredIds: Set<string> }).retiredIds
 }
 
-function recordSwitchableOf(r: ChatRegistry): (chatId: string, id: string) => void {
-  return (r as unknown as { recordSwitchable(chatId: string, id: string): void }).recordSwitchable.bind(r)
+/** 私有退役入口：模拟一个历史条目（kept 决定 /session 是否可切回）。 */
+function retireOf(r: ChatRegistry): (chatId: string, id: string, kept: boolean) => void {
+  return (r as unknown as { retire(chatId: string, id: string, kept: boolean): void }).retire.bind(r)
 }
 
 /** Minimal fake agent registry: create always succeeds; resume succeeds unless
@@ -152,7 +152,7 @@ async function makeRestartBridge(mediaDir: string, opts?: { failResumeIds?: stri
 }
 
 describe('switchable list persistence (registry)', () => {
-  it('resetChat soft-retires the current session into the chat switchable list and the durable file', async () => {
+  it('resetChat soft-retires the current session into the chat history and the durable file', async () => {
     const mediaDir = mkdtemp()
     const { agents } = makeDirectAgents()
     const registry = new ChatRegistry(makeRegistryDeps(mediaDir, agents))
@@ -166,84 +166,111 @@ describe('switchable list persistence (registry)', () => {
     expect(list).toHaveLength(1)
     expect(list[0].id).toBe(bareId)
     expect(typeof list[0].retiredAt).toBe('number')
-    // SOFT retire: durably retired (out of every create path) but NOT broken —
-    // /session must keep it switchable.
-    expect(registry.retiredSessionIds.has(bareId)).toBe(true)
-    expect(brokenOf(registry).has(bareId)).toBe(false)
-    // A first-generation /new must not hard-retire the bare id on top of the
-    // soft retire (it is the same id).
-    expect(registry.retiredSessionIds.has('onebot-private-10001')).toBe(true)
-    // The list file lands on disk (atomic, no .tmp leftover).
+    // SOFT retire: durably retired (out of every create path) but kept — /session
+    // keeps it switchable.
+    expect(retiredIdsOf(registry).has(bareId)).toBe(true)
+    // The single mapping file carries the binding removal and the history.
     await vi.waitFor(async () => {
-      const content = await readFile(join(mediaDir, 'switchable-sessions.json'), 'utf8')
-      expect(JSON.parse(content)).toEqual({ 'private:10001': [{ id: bareId, retiredAt: list[0].retiredAt }] })
-    })
-    await vi.waitFor(async () => {
-      const retired = JSON.parse(await readFile(join(mediaDir, 'retired-sessions.json'), 'utf8')) as string[]
-      expect(retired).toContain(bareId)
+      const content = await readFile(join(mediaDir, 'chat-sessions.json'), 'utf8')
+      const entry = JSON.parse(content)['private:10001']
+      expect(entry.session).toBeUndefined()
+      expect(entry.retired).toEqual([{ id: bareId, retiredAt: list[0].retiredAt, kept: true }])
     })
   })
 
-  it('recordSwitchable caps at 20 per chat, dedupes and keeps newest first', () => {
+  it('resetChat retires an idle session too, so the next message never resumes it', async () => {
     const mediaDir = mkdtemp()
     const { agents } = makeDirectAgents()
     const registry = new ChatRegistry(makeRegistryDeps(mediaDir, agents))
-    const record = recordSwitchableOf(registry)
-    for (let i = 1; i <= 25; i++) record('private:10001', 'onebot-private-10001-s' + String(i).padStart(2, '0'))
-    record('private:10001', 'onebot-private-10001-s07')
+    const chat = await registry.ensureChat('private:10001', '小明')
+    const oldId = String(chat.sessionId)
+    // Idle: the sweep releases the agent but keeps the binding.
+    chat.lastActivityAt = Date.now() - 30 * 24 * 60 * 60 * 1000
+    await registry.sweepIdleChats()
+    expect(registry.chats.has('private:10001')).toBe(false)
+    expect(registry.currentSessionId('private:10001')).toBe(oldId)
+
+    await registry.resetChat('private:10001')
+    expect(registry.currentSessionId('private:10001')).toBeUndefined()
+    expect(registry.switchableSessions('private:10001').map(entry => entry.id)).toEqual([oldId])
+    await vi.waitFor(async () => {
+      const entry = JSON.parse(await readFile(join(mediaDir, 'chat-sessions.json'), 'utf8'))['private:10001']
+      expect(entry.session).toBeUndefined()
+      expect(entry.retired).toEqual([{ id: oldId, retiredAt: expect.any(Number), kept: true }])
+    })
+
+    const next = await registry.ensureChat('private:10001', '小明')
+    expect(next.sessionId).not.toBe(oldId)
+  })
+
+  it('retire caps the switchable list at 20 per chat while keeping every id blocked and newest first', () => {
+    const mediaDir = mkdtemp()
+    const { agents } = makeDirectAgents()
+    const registry = new ChatRegistry(makeRegistryDeps(mediaDir, agents))
+    const retire = retireOf(registry)
+    for (let i = 1; i <= 25; i++) retire('private:10001', 'onebot-private-10001-s' + String(i).padStart(2, '0'), true)
+    retire('private:10001', 'onebot-private-10001-s07', true)
     const list = registry.switchableSessions('private:10001')
     expect(list).toHaveLength(20)
-    expect(list[0].id).toBe('onebot-private-10001-s07')
     expect(list.filter(e => e.id === 'onebot-private-10001-s07')).toHaveLength(1)
-    // The oldest entry was pushed out by the cap.
+    // The oldest entries left the switchable list but stay blocked for reuse.
     expect(list.some(e => e.id === 'onebot-private-10001-s01')).toBe(false)
+    expect(retiredIdsOf(registry).has('onebot-private-10001-s01')).toBe(true)
     // Other chats are untouched.
     expect(registry.switchableSessions('group:888')).toEqual([])
   })
 
-  it('loadSwitchable: corrupt file warns and keeps the current lists; save stays atomic', async () => {
+  it('migrates the legacy switchable list into the chat history', async () => {
     const mediaDir = mkdtemp()
-    const logLines: string[] = []
     const { agents } = makeDirectAgents()
-    const registry = new ChatRegistry(makeRegistryDeps(mediaDir, agents, logLines))
+    const registry = new ChatRegistry(makeRegistryDeps(mediaDir, agents))
     await mkdir(mediaDir, { recursive: true })
-    await writeFile(join(mediaDir, 'switchable-sessions.json'), '{not json', 'utf8')
-    await registry.loadSwitchable()
-    expect(logLines.some(l => l.startsWith('warn') && l.includes('switchable-sessions file is unparsable'))).toBe(true)
-    // The in-memory lists were kept (not wiped by the corrupt file).
-    expect(registry.switchableSessions('private:10001')).toEqual([])
-    // A later record still persists (atomic temp+rename, no .tmp leftover).
-    recordSwitchableOf(registry)('private:10001', 'onebot-private-10001-x')
-    await vi.waitFor(async () => {
-      const content = await readFile(join(mediaDir, 'switchable-sessions.json'), 'utf8')
-      expect(content).toContain('onebot-private-10001-x')
-    })
+    await writeFile(join(mediaDir, 'chat-sessions.json'), JSON.stringify({ 'private:10001': 'onebot-private-10001' }), 'utf8')
+    await writeFile(join(mediaDir, 'switchable-sessions.json'), JSON.stringify({
+      'private:10001': [
+        { id: 'onebot-private-10001-new', retiredAt: 20 },
+        { id: 'onebot-private-10001-old', retiredAt: 10 },
+      ],
+    }), 'utf8')
+    await registry.loadMapping()
+    // The history keeps the old list's new→old order and the binding resumes.
+    expect(registry.switchableSessions('private:10001').map(e => e.id)).toEqual([
+      'onebot-private-10001-new',
+      'onebot-private-10001-old',
+    ])
+    expect(registry.currentSessionId('private:10001')).toBe('onebot-private-10001')
+    const mapping = JSON.parse(await readFile(join(mediaDir, 'chat-sessions.json'), 'utf8'))
+    expect(mapping['private:10001'].retired.map((entry: { id: string }) => entry.id)).toEqual([
+      'onebot-private-10001-new',
+      'onebot-private-10001-old',
+    ])
+    await registry.stop()
   })
-
-  it('loadSwitchable: a missing file is a silent fresh start (no warn)', async () => {
+  it('a missing mapping file is a silent fresh start (no warn)', async () => {
     const mediaDir = mkdtemp()
     const logLines: string[] = []
     const { agents } = makeDirectAgents()
     const registry = new ChatRegistry(makeRegistryDeps(mediaDir, agents, logLines))
-    await registry.loadSwitchable()
-    expect(logLines.some(l => l.includes('switchable-sessions read failed'))).toBe(false)
+    await registry.loadMapping()
+    expect(logLines.some(l => l.includes('mapping read failed'))).toBe(false)
     expect(registry.switchableSessions('private:10001')).toEqual([])
   })
 })
 
 describe('switchSession (registry)', () => {
-  it('refuses a broken id even when listed, and never leaks another chat\'s list', async () => {
+  it('refuses a non-switchable id and never leaks another chat\'s history', async () => {
     const mediaDir = mkdtemp()
     const { agents, resumed } = makeDirectAgents()
     const registry = new ChatRegistry(makeRegistryDeps(mediaDir, agents))
     const target = 'onebot-private-10001-old'
-    recordSwitchableOf(registry)('private:10001', target)
-    brokenOf(registry).add(target)
+    retireOf(registry)('private:10001', target, false)
     const outcome = await registry.switchSession('private:10001', target)
     expect(outcome).toEqual({ ok: false, reason: 'broken', message: '目标会话已损坏' })
     expect(resumed).toEqual([])
-    // The entry stays listed (a refusal is not a destructive write).
-    expect(registry.switchableSessions('private:10001').map(e => e.id)).toEqual([target])
+    // The refusal is not a destructive write: the id stays blocked and out of
+    // the switchable list.
+    expect(registry.switchableSessions('private:10001')).toEqual([])
+    expect(retiredIdsOf(registry).has(target)).toBe(true)
     // Chat B can neither see nor switch to chat A's switchable session.
     expect(registry.switchableSessions('private:99999')).toEqual([])
     const cross = await registry.switchSession('private:99999', target)
@@ -268,20 +295,18 @@ describe('switchSession (registry)', () => {
     expect(resumed).toEqual([s1])
     // The target is live again and no longer retired (in-memory + durable).
     expect(String(registry.chats.get('private:10001')!.sessionId)).toBe(s1)
-    expect(registry.retiredSessionIds.has(s1)).toBe(false)
-    expect(brokenOf(registry).has(s1)).toBe(false)
+    expect(retiredIdsOf(registry).has(s1)).toBe(false)
     await vi.waitFor(async () => {
-      const retired = JSON.parse(await readFile(join(mediaDir, 'retired-sessions.json'), 'utf8')) as string[]
-      expect(retired).not.toContain(s1)
+      const mapping = JSON.parse(await readFile(join(mediaDir, 'chat-sessions.json'), 'utf8'))
+      expect(mapping['private:10001'].retired.map((entry: { id: string }) => entry.id)).not.toContain(s1)
     })
     // The previous session took its place in the switchable list (round trip).
     expect(registry.switchableSessions('private:10001').map(e => e.id)).toEqual([s2])
-    expect(registry.retiredSessionIds.has(s2)).toBe(true)
-    expect(brokenOf(registry).has(s2)).toBe(false)
+    expect(retiredIdsOf(registry).has(s2)).toBe(true)
     // The mapping now points at the restored session.
     await vi.waitFor(async () => {
-      const mapping = JSON.parse(await readFile(join(mediaDir, 'chat-sessions.json'), 'utf8')) as Record<string, string>
-      expect(mapping['private:10001']).toBe(s1)
+      const mapping = JSON.parse(await readFile(join(mediaDir, 'chat-sessions.json'), 'utf8'))
+      expect(mapping['private:10001'].session).toBe(s1)
     })
   })
 
@@ -293,15 +318,14 @@ describe('switchSession (registry)', () => {
     const chat1 = await registry.ensureChat('private:10001', '小明')
     const s1 = String(chat1.sessionId)
     // Simulate a /new-retired switchable target.
-    registry.retiredSessionIds.add(target)
-    recordSwitchableOf(registry)('private:10001', target)
+    retireOf(registry)('private:10001', target, true)
 
     const outcome = await registry.switchSession('private:10001', target)
     expect(outcome.ok).toBe(false)
     expect((outcome as { reason: string }).reason).toBe('resume-failed')
     expect(resumed).toEqual([target])
-    // The unusable target is hard-retired (broken) and left the list…
-    expect(brokenOf(registry).has(target)).toBe(true)
+    // The unusable target is marked broken and left the switchable list…
+    expect(retiredIdsOf(registry).has(target)).toBe(true)
     expect(registry.switchableSessions('private:10001').map(e => e.id)).toEqual([s1])
     // …the chat is not stuck: the next ensureChat rebuilds a FRESH session.
     const chat2 = await registry.ensureChat('private:10001', '小明')
@@ -370,16 +394,12 @@ describe('/session command (bridge harness)', () => {
     await h.bridge.stop()
     await h.connection.stop()
 
-    // The switch un-retired the id: the retired record no longer contains it.
-    const retired = JSON.parse(await readFile(join(h.mediaDir, 'retired-sessions.json'), 'utf8')) as string[]
-    expect(retired).not.toContain(original)
-    // The mapping entry points at the restored session (bare string, or the
-    // additive object form when the resumed session restored a workspace
-    // override) and resumes on restart.
-    const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8')) as Record<string, unknown>
+    // The switch un-retired the id: the durable history no longer contains it,
+    // and the mapping entry resumes on restart.
+    const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8'))
     const entry = mapping['private:10001']
-    const mappedSession = typeof entry === 'string' ? entry : (entry as { session: string }).session
-    expect(mappedSession).toBe(original)
+    expect(entry.session).toBe(original)
+    expect(entry.retired.map((item: { id: string }) => item.id)).not.toContain(original)
     const { bridge: bridge2, resumed } = await makeRestartBridge(h.mediaDir)
     await vi.waitFor(() => {
       expect(String(registryOf({ bridge: bridge2 }).chats.get('private:10001')?.sessionId ?? '')).toBe(original)
@@ -563,7 +583,7 @@ describe('/session command (bridge harness)', () => {
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
     // The bare-id create collision is a hard retire — no switchable entry.
     expect(registryOf(h).switchableSessions('private:10001')).toEqual([])
-    expect(registryOf(h).retiredSessionIds.has('onebot-private-10001')).toBe(true)
+    expect(retiredIdsOf(registryOf(h)).has('onebot-private-10001')).toBe(true)
 
     // A collision heal retires the live session without listing it either.
     const fallback = h.sessionIds[0]
@@ -572,8 +592,8 @@ describe('/session command (bridge harness)', () => {
       reason: { kind: 'error', error: { code: 'E_COLLISION', message: 'session "' + fallback + '" already has a persisted log on disk that does not match this live session (id collision)' } },
     }))
     await vi.waitFor(async () => {
-      const retired = JSON.parse(await readFile(join(h.mediaDir, 'retired-sessions.json'), 'utf8')) as string[]
-      expect(retired).toContain(fallback)
+      const mapping = JSON.parse(await readFile(join(h.mediaDir, 'chat-sessions.json'), 'utf8'))
+      expect(mapping['private:10001'].retired.map((entry: { id: string }) => entry.id)).toContain(fallback)
     })
     expect(registryOf(h).switchableSessions('private:10001')).toEqual([])
 

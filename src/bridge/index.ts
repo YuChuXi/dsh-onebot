@@ -165,8 +165,6 @@ export class ChatBridge {
       if (connected) this.outbound.drainPendingSends()
     }
     this.registry.mappingLoaded = this.ready().then(async () => {
-      await this.registry.loadRetired()
-      await this.registry.loadSwitchable()
       await this.registry.loadMapping()
     }).then(() => {
       if (this.stopping) return
@@ -477,7 +475,7 @@ export class ChatBridge {
       isAdmin: userId => classifyUserRole(userId, bridge.deps.policy.adminUsers) === 'admin',
       getChat: chatId => bridge.chats.get(chatId),
       resetChat: chatId => bridge.resetChat(chatId),
-      sessionIdFromMapping: chatId => bridge.sessionIdFromMapping(chatId),
+      currentSessionId: chatId => bridge.registry.currentSessionId(chatId),
       switchableSessions: chatId => bridge.registry.switchableSessions(chatId),
       switchSession: (chatId, targetSessionId) => bridge.registry.switchSession(chatId, targetSessionId),
       sessionPersistence: bridge.deps.sessionPersistence,
@@ -487,11 +485,6 @@ export class ChatBridge {
       agentDefaultModel: bridge.deps.agentDefaultModel,
       commands: bridge.deps.commands,
     }
-  }
-
-  /** Read the chat→session mapping file (/session's current item). */
-  private async sessionIdFromMapping(chatId: ChatId): Promise<string | undefined> {
-    return this.registry.sessionIdFromMapping(chatId)
   }
 
   /** M3-D4c: steer a completed voice transcript into the chat's agent — the
@@ -702,10 +695,6 @@ export class ChatBridge {
 
   private effectiveCwd(chatId?: ChatId): string {
     return this.registry.effectiveCwd(chatId)
-  }
-
-  private resolvePresetId(chatId: ChatId): Promise<string | undefined> {
-    return this.registry.resolvePresetId(chatId)
   }
 
   private saveMappingDebounced(): void {
