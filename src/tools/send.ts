@@ -181,15 +181,21 @@ export function registerSendTools(register: RegisterTool, bridge: ChatBridge, li
 
   send({
     name: 'qq_send_text',
-    description: '批量发纯文字：texts 里每条各发一条消息（最常用的出口，等价于 qq_send_message 只发 text）。',
+    description: '发纯文字：text 为字符串时发一条消息，为字符串数组时按顺序各发一条（等价于 qq_send_message 只发 text）。',
     parameters: {
-      texts: { type: 'array', items: { type: 'string' }, required: true, description: '每条各发一条消息，按顺序发送' },
+      text: {
+        required: true,
+        description: '要发送的文字：字符串发一条消息，字符串数组按顺序各发一条',
+        oneOf: [
+          { type: 'string' },
+          { type: 'array', items: { type: 'string' } },
+        ],
+      },
     },
     build: async a => {
-      const texts = Array.isArray(a.texts)
-        ? a.texts.filter((item): item is string => typeof item === 'string' && item !== '')
-        : []
-      return { kind: 'segments', messages: texts.map(text => [{ type: 'text', data: { text } }]) }
+      const raw = typeof a.text === 'string' ? [a.text] : Array.isArray(a.text) ? a.text : []
+      const texts = raw.filter((item): item is string => typeof item === 'string' && item !== '')
+      return { kind: 'segments', messages: texts.map(value => [{ type: 'text', data: { text: value } }]) }
     },
   })
 
@@ -198,15 +204,18 @@ export function registerSendTools(register: RegisterTool, bridge: ChatBridge, li
     description: '向 QQ 会话发送一张或多张图片（本地文件路径或 http(s) URL，最多 9 张）。用于回复用户时附带截图/生成图等。',
     parameters: {
       sources: {
-        type: 'array',
-        items: { type: 'string' },
         required: true,
-        description: '图片来源：本地绝对路径或 http(s) URL，最多 9 个',
+        description: '图片来源：单个本地绝对路径或 http(s) URL，或它们的数组（最多 9 个）',
+        oneOf: [
+          { type: 'string' },
+          { type: 'array', items: { type: 'string' } },
+        ],
       },
       caption: { type: 'string', description: '图片说明文字（可选，作为图片前的文本发送）' },
     },
     build: async (a, env) => {
-      const sources = Array.isArray(a.sources) ? a.sources.filter((s): s is string => typeof s === 'string') : []
+      const raw = typeof a.sources === 'string' ? [a.sources] : Array.isArray(a.sources) ? a.sources : []
+      const sources = raw.filter((s): s is string => typeof s === 'string' && s !== '')
       if (sources.length === 0) throw new Error('qq_send_image: sources 不能为空')
       if (sources.length > 9) throw new Error('qq_send_image: 一次最多 9 张图片')
       const ctx: SegmentSendContext = { allowedRoots: env.roots, ...env.limits }
@@ -292,7 +301,7 @@ export function registerSendTools(register: RegisterTool, bridge: ChatBridge, li
           type: 'object',
           properties: {
             name: { type: 'string', description: '显示名（≤24 字）' },
-            content: { type: 'string', description: '消息内容（≤500 字，必填）' },
+            content: { type: 'string', required: true, description: '消息内容（≤500 字）' },
           },
           additionalProperties: true,
         },
