@@ -9,7 +9,7 @@ description: NapCat（OneBot 11）白名单接口的参数与返回、消息段�
 
 ## 查接口
 
-`qq_napcat_api` 只放行 `references/api.md` 里的 18 个 action，其他接口会被拒。该文件按用途分节，每个 action 一节，标题是 `### <action> — <中文用途>`，按任务词检索即可命中。
+`qq_napcat_api` 只放行 `references/api.md` 里的 20 个 action，其他接口会被拒。该文件按用途分节，每个 action 一节，标题是 `### <action> — <中文用途>`，按任务词检索即可命中。
 
 需要群号的接口，`group_id` 用系统提示词「当前会话」里的群号；私聊接口用其中的对方 QQ。不要从消息记录或接口返回值里推断。
 

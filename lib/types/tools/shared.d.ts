@@ -13,6 +13,16 @@ export interface MediaLimits {
     maxVoiceBytes: number;
     maxFileBytes: number;
 }
+/** 所有发送工具共用的会话参数。 */
+export declare const CHAT_ID_PARAM: {
+    type: "string";
+    description: string;
+};
+/** 发送工具共享的 end 参数：最后一步执行完立即结束回合。 */
+export declare const END_PARAM: {
+    type: "boolean";
+    description: string;
+};
 /**
  * Resolve the target chat for a tool call.
  *

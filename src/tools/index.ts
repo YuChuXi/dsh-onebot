@@ -18,13 +18,15 @@ import { splitChatId } from '../chat/index.js'
 import { encodeLocalFile, isLocalPath } from '../media/local.js'
 import { incomingSegments, parseMessage } from '../onebot/segments.js'
 import { registerSendTools } from './send.js'
-import { mediaRoots, resolveChat, type MediaLimits, type RegisterTool } from './shared.js'
+import { CHAT_ID_PARAM, END_PARAM, mediaRoots, resolveChat, type MediaLimits, type RegisterTool } from './shared.js'
 
 /** OneBot actions a model may invoke through qq_napcat_api. */
 const NAPCAT_API_WHITELIST = [
   'get_group_member_list',
   'get_group_member_info',
   'get_stranger_info',
+  'group_poke',
+  'friend_poke',
   'get_forward_msg',
   'get_record',
   'get_file',
@@ -148,6 +150,55 @@ export function registerTools(
         }
       }
       return await connection.call(a.action, params) as JsonValue
+    },
+  }))
+
+  register(defineTool({
+    name: 'qq_send_poke',
+    description: '戳一戳指定 QQ：群聊内戳群成员，或私聊戳对方。省略 user_id 时取当前私聊对端。',
+    parameters: {
+      chat_id: CHAT_ID_PARAM,
+      user_id: { type: 'string', description: '要戳的 QQ 号；群聊必填，私聊省略时取当前对端' },
+      end: END_PARAM,
+    },
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => {
+        const v = value as { poked?: unknown }
+        return [{ type: 'text', text: '已戳 ' + String(v.poked ?? '') }]
+      },
+    },
+    isConcurrencySafe: () => true,
+    execute: async (args, exec) => {
+      const a = args as { user_id?: unknown; chat_id?: unknown; end?: unknown }
+      const chatId = resolveChat(bridge, exec, a.chat_id)
+      const ref = splitChatId(chatId)
+      const given = typeof a.user_id === 'string' || typeof a.user_id === 'number' ? String(a.user_id) : ''
+      if (given === '' && ref.kind === 'group') throw new Error('qq_send_poke: 群聊必须给 user_id')
+      const userId = given !== '' ? given : ref.target
+      if (!/^\d+$/.test(userId)) throw new Error('qq_send_poke: user_id 必须是 QQ 号')
+      if (ref.kind === 'group') {
+        await connection.call('group_poke', { group_id: Number(ref.target), user_id: Number(userId) })
+      } else {
+        await connection.call('friend_poke', { user_id: Number(userId) })
+      }
+      if (a.end === true) exec.concludeTurn()
+      return { poked: userId, chatId }
+    },
+  }))
+
+  register(defineTool({
+    name: 'qq_end_turn',
+    description: '立即结束当前回合，不发送任何消息。发言已发完或无需回复时用它收尾。',
+    parameters: {},
+    output: {
+      schema: { type: 'json' },
+      render: () => [{ type: 'text', text: '已结束回合' }],
+    },
+    isConcurrencySafe: () => false,
+    execute: async (_args, exec) => {
+      exec.concludeTurn()
+      return { ended: true }
     },
   }))
 

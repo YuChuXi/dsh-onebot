@@ -1,6 +1,6 @@
 # 白名单 API
 
-`qq_napcat_api {action, params}` 只放行本文件的 18 个 action，其余 OneBot/NapCat 接口会被拒绝。返回 NapCat 响应里的 `data`；`retcode != 0` 时 `message` 是失败原因。
+`qq_napcat_api {action, params}` 只放行本文件的 20 个 action，其余 OneBot/NapCat 接口会被拒绝。返回 NapCat 响应里的 `data`；`retcode != 0` 时 `message` 是失败原因。
 
 参数里的 `group_id`、`user_id` 传数字即可，NapCat 内部按字符串处理。
 
@@ -167,6 +167,23 @@
 ```
 
 `login_days` 恒为 `0`（客户端已不提供）。
+
+### group_poke — 群聊戳一戳
+
+| 字段 | 类型 | 必选 | 说明 |
+|---|---|---|---|
+| `group_id` | number | 是 | 群号 |
+| `user_id` | number | 是 | 对方 QQ 号 |
+
+无返回数据。
+
+### friend_poke — 私聊戳一戳
+
+| 字段 | 类型 | 必选 | 说明 |
+|---|---|---|---|
+| `user_id` | number | 是 | 对方 QQ 号 |
+
+无返回数据。
 
 ### get_forward_msg — 取合并转发内容
 

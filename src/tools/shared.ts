@@ -18,6 +18,18 @@ export interface MediaLimits {
   maxFileBytes: number
 }
 
+/** 所有发送工具共用的会话参数。 */
+export const CHAT_ID_PARAM = {
+  type: 'string' as const,
+  description: '目标会话（private:<QQ号> 或 group:<群号>）；省略时默认当前会话',
+}
+
+/** 发送工具共享的 end 参数：最后一步执行完立即结束回合。 */
+export const END_PARAM = {
+  type: 'boolean' as const,
+  description: '本次是最后一步：执行后立即结束回合，省掉一次收尾的模型调用',
+}
+
 /**
  * Resolve the target chat for a tool call.
  *

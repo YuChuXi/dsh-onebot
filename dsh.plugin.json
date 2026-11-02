@@ -13,6 +13,8 @@
       "qq_send_video",
       "qq_send_file",
       "qq_send_forward",
+      "qq_send_poke",
+      "qq_end_turn",
       "qq_napcat_api",
       "qq_group_history",
       "qq_thinking"

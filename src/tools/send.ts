@@ -12,7 +12,7 @@ import { isUrl } from '../media/store.js'
 import { normalizeSegment } from '../onebot/segments.js'
 import type { SegmentSendContext } from '../onebot/segment-types/registry.js'
 import type { OutboundSegment } from '../outbound/index.js'
-import { mediaRoots, resolveChat, type MediaLimits, type RegisterTool } from './shared.js'
+import { CHAT_ID_PARAM, END_PARAM, mediaRoots, resolveChat, type MediaLimits, type RegisterTool } from './shared.js'
 
 /** Output projection shared by the send tools (unconstrained JSON value). */
 function sendOutput() {
@@ -23,18 +23,6 @@ function sendOutput() {
       return [{ type: 'text' as const, text: v.messageId != null ? '已发送（message_id=' + v.messageId + '）' : '已发送' }]
     },
   }
-}
-
-/** 发送工具共享的 end 参数：最后一条发完立即结束回合。 */
-const END_PARAM = {
-  type: 'boolean' as const,
-  description: '本条是最后一条：发完立即结束回合，省掉一次收尾的模型调用',
-}
-
-/** 所有发送工具共用的会话参数。 */
-const CHAT_ID_PARAM = {
-  type: 'string' as const,
-  description: '目标会话（private:<QQ号> 或 group:<群号>）；省略时默认当前会话',
 }
 
 /**

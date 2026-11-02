@@ -3,7 +3,8 @@
  *
  * 入站载荷是记录数组；出站契约是「回合最终文本不会自动发送」——
  * 要发言只能调用 qq_send_message（或 qq_send_text / qq_send_image 等），
- * 最后一条带 `end: true` 立即结束回合。
+ * 最后一条带 `end: true` 立即结束回合。也可以完全不调用发送工具，
+ * 此时普通输出照常丢弃，不产生任何 QQ 消息。
  * @module dsh-onebot/prompt
  */
 import type { ChatId } from '../chat/index.js';
