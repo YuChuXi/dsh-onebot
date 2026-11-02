@@ -18,6 +18,7 @@ import { splitChatId } from '../chat/index.js'
 import { encodeLocalFile, isLocalPath } from '../media/local.js'
 import { incomingSegments, parseMessage } from '../onebot/segments.js'
 import { registerSendTools } from './send.js'
+import { registerStickerTools } from './stickers.js'
 import { CHAT_ID_PARAM, END_PARAM, mediaRoots, resolveChat, type MediaLimits, type RegisterTool } from './shared.js'
 
 /** OneBot actions a model may invoke through qq_napcat_api. */
@@ -25,6 +26,8 @@ const NAPCAT_API_WHITELIST = [
   'get_group_member_list',
   'get_group_member_info',
   'get_stranger_info',
+  'fetch_custom_face',
+  'add_custom_face',
   'group_poke',
   'friend_poke',
   'get_forward_msg',
@@ -117,6 +120,7 @@ export function registerTools(
   }
 
   registerSendTools(register, bridge, limits)
+  registerStickerTools(register, bridge, connection, limits)
 
   register(defineTool({
     name: 'qq_napcat_api',

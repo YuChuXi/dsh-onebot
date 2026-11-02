@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url'
 import type { AgentDefaultModelLike, BridgeDeps } from './config.js'
 import type { OneBotConnection, OneBotEvent } from '../onebot/connection.js'
 import type { MediaStore } from '../media/store.js'
+import { extForUrl } from '../media/store.js'
 import type { Transcriber } from '../media/stt.js'
 import { transcriptLabel } from '../media/stt.js'
 import type { MediaRef } from '../onebot/segments.js'
@@ -293,6 +294,23 @@ export class ChatBridge {
    */
   sendToChat(chatId: ChatId, text: string, options: SendOptions = {}): Promise<string[]> {
     return this.outbound.sendToChat(chatId, text, options)
+  }
+
+  /**
+   * 把远程表情图片下载到插件媒体目录，返回本机路径。
+   * 表情预览与 add_custom_face 都需要 NapCat / 模型可访问的本地文件。
+   *
+   * Args:
+   *   url (string): 表情图片 URL。
+   *
+   * Returns:
+   *   Promise<string>: 下载后的本机路径。
+   *
+   * Callers:
+   *   - `src/tools/stickers.ts`（qq_sticker_list 预览、qq_collect_sticker 的 URL / 商城表情）。
+   */
+  async saveSticker(url: string): Promise<string> {
+    return await this.deps.media.downloadUrl(url, extForUrl(url, 'image'), this.deps.config.maxImageBytes)
   }
 
   /**

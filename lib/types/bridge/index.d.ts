@@ -132,6 +132,20 @@ export declare class ChatBridge {
      */
     sendToChat(chatId: ChatId, text: string, options?: SendOptions): Promise<string[]>;
     /**
+     * 把远程表情图片下载到插件媒体目录，返回本机路径。
+     * 表情预览与 add_custom_face 都需要 NapCat / 模型可访问的本地文件。
+     *
+     * Args:
+     *   url (string): 表情图片 URL。
+     *
+     * Returns:
+     *   Promise<string>: 下载后的本机路径。
+     *
+     * Callers:
+     *   - `src/tools/stickers.ts`（qq_sticker_list 预览、qq_collect_sticker 的 URL / 商城表情）。
+     */
+    saveSticker(url: string): Promise<string>;
+    /**
      * Send raw OneBot segments (used by the media tools).
      * @param chatId - target chat.
      * @param segments - outbound segments.
