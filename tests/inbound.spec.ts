@@ -277,7 +277,7 @@ describe('inbound pipeline', () => {
     // 事件记录只有 notice 与事件本身的字段：不是发言，没有 qq / nickname / message，
     // 群号由会话表达，raw_info 已整理成 text。
     expect(records[1]).toMatchObject({
-      notice: 'notify/poke', user_id: 10001, target_id: 10002, text: '10001 揉了揉 10002 的尾巴',
+      notice: 'notify/poke', user_id: 10001, target_id: 10002, text: '10001 揉了揉 你 的尾巴',
     })
     expect(records[1]).not.toHaveProperty('qq')
     expect(records[1]).not.toHaveProperty('nickname')
@@ -430,7 +430,7 @@ describe('normalizeEvent（notice）', () => {
     expect(inbound?.wakes).toBe(true)
     expect(inbound?.chatId).toBe('group:888')
     expect(inbound?.notice).toMatchObject({
-      notice: 'notify/poke', user_id: 10001, target_id: 10002, text: '小明 揉了揉 鱼 的尾巴',
+      notice: 'notify/poke', user_id: 10001, target_id: 10002, text: '小明 揉了揉 你 的尾巴',
     })
     expect(inbound?.notice).not.toHaveProperty('group_id')
     expect(inbound?.notice).not.toHaveProperty('raw_info')

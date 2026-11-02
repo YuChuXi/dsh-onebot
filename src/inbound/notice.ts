@@ -42,6 +42,8 @@ export type NameResolver = (qq: string, groupId: string) => Promise<string>
 interface NoticeHandlerContext {
   /** 事件所属群；私聊为 ''。 */
   groupId: string
+  /** 机器人自身 QQ；参与者是机器人时写作「你」。 */
+  selfId: string
   /** QQ → 显示名。 */
   resolveName: NameResolver
 }
@@ -66,8 +68,8 @@ type NoticeHandler = (record: NoticeRecord, event: OneBotEvent, context: NoticeH
  * 戳一戳：把 `raw_info`（NapCat 的 pokedetail = `json.items`）整理成一句原文案。
  *
  * 条目分三类：`qq` 是参与者的内部 uid（按出现顺序对应发起者、被戳者，记录里只留
- * QQ 号）、`nor` 是文案片段、其余（图片等装饰）丢弃。`qq` 条目自带的 `nm` 优先，
- * 空则按 QQ 号取名。整理后 `raw_info` 不再单独携带。
+ * QQ 号；机器人本人写作「你」）、`nor` 是文案片段、其余（图片等装饰）丢弃。`qq` 条目自带的
+ * `nm` 优先，空则按 QQ 号取名。整理后 `raw_info` 不再单独携带。
  *
  * Args:
  *   record (NoticeRecord): 已带 `raw_info` 的记录（原地写入 `text`、删除 `raw_info`）。
@@ -95,6 +97,10 @@ async function pokeHandler(record: NoticeRecord, event: OneBotEvent, context: No
     if (entry.type !== 'qq') continue
     const qq = participants[participant] ?? ''
     participant += 1
+    if (qq !== '' && qq === context.selfId) {
+      parts.push('你')
+      continue
+    }
     const carried = typeof entry.nm === 'string' ? entry.nm : ''
     const name = carried !== '' ? carried : (qq !== '' ? await context.resolveName(qq, context.groupId) : '')
     parts.push(name !== '' ? name : qq)
@@ -144,8 +150,8 @@ export async function renderNotice(
   }
   const time = Number(event.time ?? 0)
   if (time > 0) record.time = formatClock(time * 1000)
-  await NOTICE_HANDLERS[kind]?.(record, event, { groupId: text(event.group_id), resolveName })
   const self = selfId !== '' ? selfId : text(event.self_id)
+  await NOTICE_HANDLERS[kind]?.(record, event, { groupId: text(event.group_id), selfId: self, resolveName })
   // 事件的主体或对象是机器人本人：戳一戳的 target_id、入群/退群/禁言的 user_id。
   const wakes = self !== '' && (text(event.target_id) === self || text(event.user_id) === self)
   return { record, wakes }
