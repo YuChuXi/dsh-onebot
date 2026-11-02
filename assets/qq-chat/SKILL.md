@@ -1,6 +1,6 @@
 ---
 name: qq-chat
-description: NapCat（OneBot 11）白名单接口的参数与返回、消息段与媒体细节、表情 id，以及 dsh-onebot 的 qq_* 工具限制。Use when calling a whitelisted NapCat API, building message segments, or a send fails.
+description: NapCat（OneBot 11）白名单接口的参数与返回、消息段与媒体细节、表情 id、定时任务规则，以及 dsh-onebot 的 qq_* 工具限制。Use when calling a whitelisted NapCat API, building message segments, scheduling a reminder, or a send fails.
 ---
 
 # QQ 聊天（OneBot 11 / NapCat）
@@ -22,6 +22,15 @@ description: NapCat（OneBot 11）白名单接口的参数与返回、消息段�
 ## 表情
 
 `references/faces.md`：`face` 段 id 与中文名对照。
+
+## 定时任务
+
+四个 `qq_*_schedule` 工具绑定群/私聊，不绑会话：`/new` 换会话后仍按原来的 chat 触发；`chat_id` 省略时是当前会话，操作其他群/私聊必须显式给出。
+
+- `qq_create_schedule` 的时间参数六选一，`time_zone` 必填；本部署使用 `Asia/Shanghai`。
+- `prompt` 是到点后投递给你的提醒内容，不是发给群或好友的消息；到点后要不要发言、发什么，仍按通道契约调用 `qq_send_*`。
+- 循环任务在停机恢复后只补发最近一次漏掉的触发；本地时刻不存在（夏令时跳变）时跳过，重复时刻取较早的一次。
+- `qq_list_schedules` / `qq_delete_schedule` / `qq_update_schedule` 只作用于 `chat_id` 指定的会话；`update` 不能改 `after_seconds`，新的相对延时需要新建。
 
 ## 历史返回
 

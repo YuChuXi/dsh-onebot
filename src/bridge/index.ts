@@ -37,6 +37,7 @@ import type { OutboundSegment, SendOptions } from '../outbound/index.js'
 import { ChatRegistry } from '../registry/index.js'
 import type { ChatAgent } from '../registry/index.js'
 import { InboundPipeline } from '../inbound/index.js'
+import { TimerRunner } from '../timers/index.js'
 import type { NormalizedInbound } from '../inbound/normalize.js'
 import { describeError, errorStack } from '../shared/errors.js'
 import { currentTrace, newTraceId, runWithTrace, TRACE_REASONS } from '../ops/trace.js'
@@ -74,6 +75,8 @@ export class ChatBridge {
   /** Inbound pipeline (D1-PR4): normalizeOneBot11 + the policy→media→quote→
    * dispatch path; the same-name bridge methods below delegate here. */
   private readonly inbound: InboundPipeline
+  /** 会话定时器：挂在群/私聊上，到点走 wakeWithNote 唤醒回合。 */
+  readonly timers: TimerRunner
   /** Live registry indexes — the inbound/outbound/turn links keep reading
    * them through these same-name views. */
   private get chats(): Map<ChatId, ChatAgent> { return this.registry.chats }
@@ -159,6 +162,12 @@ export class ChatBridge {
       log: (level, message) => this.deps.log(level, message),
       config: deps.config,
     })
+    this.timers = new TimerRunner({
+      dir: deps.config.mediaDir,
+      now: Date.now,
+      log: (level, message) => this.deps.log(level, message),
+      deliver: (chatId, note) => this.inbound.wakeWithNote(chatId, note),
+    })
   }
 
   /** Start listening: wire connection handlers and the session event feed. */
@@ -177,6 +186,7 @@ export class ChatBridge {
     }
     this.registry.mappingLoaded = this.ready().then(async () => {
       await this.registry.loadMapping()
+      await this.timers.load()
     }).then(() => {
       if (this.stopping) return
       this.deps.log('info', 'bridge ready (' + this.registry.chats.size + ' resumed chat(s))')
@@ -195,6 +205,7 @@ export class ChatBridge {
       this.sessionFlushOff = undefined
     }
     await this.registry.stop()
+    this.timers.stop()
   }
 
   /** Map an agent session id back to its chat (for model tools). */
@@ -307,7 +318,7 @@ export class ChatBridge {
    *   Promise<string>: 下载后的本机路径。
    *
    * Callers:
-   *   - `src/tools/stickers.ts`（qq_sticker_list 预览、qq_collect_sticker 的 URL / 商城表情）。
+   *   - `src/tools/stickers.ts`（qq_list_stickers 预览、qq_collect_sticker 的 URL / 商城表情）。
    */
   async saveSticker(url: string): Promise<string> {
     return await this.deps.media.downloadUrl(url, extForUrl(url, 'image'), this.deps.config.maxImageBytes)

@@ -19,6 +19,7 @@ import { encodeLocalFile, isLocalPath } from '../media/local.js'
 import { incomingSegments, parseMessage } from '../onebot/segments.js'
 import { registerSendTools } from './send.js'
 import { registerStickerTools } from './stickers.js'
+import { registerScheduleTools } from './schedule.js'
 import { CHAT_ID_PARAM, END_PARAM, mediaRoots, resolveChat, type MediaLimits, type RegisterTool } from './shared.js'
 
 /** OneBot actions a model may invoke through qq_napcat_api. */
@@ -121,6 +122,7 @@ export function registerTools(
 
   registerSendTools(register, bridge, limits)
   registerStickerTools(register, bridge, connection, limits)
+  registerScheduleTools(register, bridge)
 
   register(defineTool({
     name: 'qq_napcat_api',

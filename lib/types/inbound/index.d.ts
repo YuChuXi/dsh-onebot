@@ -449,4 +449,19 @@ export declare class InboundPipeline {
      *   - `processInbound`。
      */
     private sleepTurn;
+    /**
+     * 定时唤醒：取该群/私聊的上文（只读，不推进水位），末尾追加一条
+     * 系统提醒后投递回合。定时挂在群/私聊上，因此与当前绑定哪个会话无关。
+     *
+     * Args:
+     *   chatId (ChatId): 定时绑定的群或私聊。
+     *   note (string): 到点要提醒的内容。
+     *
+     * Returns:
+     *   Promise<void>: 投递完成。
+     *
+     * Callers:
+     *   - `src/bridge/index.ts`：TimerRunner 的 deliver 回调。
+     */
+    wakeWithNote(chatId: ChatId, note: string): Promise<void>;
 }

@@ -13,6 +13,7 @@ import type { OneBotEvent } from '../onebot/connection.js';
 import type { ChatId } from '../chat/index.js';
 import type { OutboundSegment, SendOptions } from '../outbound/index.js';
 import type { ChatAgent } from '../registry/index.js';
+import { TimerRunner } from '../timers/index.js';
 /** T2 (P1): the queue notice sent to a chat when a message arrives while its
  * task is running under the default 'queue' policy — at most ONE per running
  * turn (the flag resets at turn/end) so a burst of queued messages never
@@ -34,6 +35,8 @@ export declare class ChatBridge {
     /** Inbound pipeline (D1-PR4): normalizeOneBot11 + the policy→media→quote→
      * dispatch path; the same-name bridge methods below delegate here. */
     private readonly inbound;
+    /** 会话定时器：挂在群/私聊上，到点走 wakeWithNote 唤醒回合。 */
+    readonly timers: TimerRunner;
     /** Live registry indexes — the inbound/outbound/turn links keep reading
      * them through these same-name views. */
     private get chats();
@@ -142,7 +145,7 @@ export declare class ChatBridge {
      *   Promise<string>: 下载后的本机路径。
      *
      * Callers:
-     *   - `src/tools/stickers.ts`（qq_sticker_list 预览、qq_collect_sticker 的 URL / 商城表情）。
+     *   - `src/tools/stickers.ts`（qq_list_stickers 预览、qq_collect_sticker 的 URL / 商城表情）。
      */
     saveSticker(url: string): Promise<string>;
     /**

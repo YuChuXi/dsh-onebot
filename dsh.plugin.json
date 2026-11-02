@@ -14,14 +14,20 @@
       "qq_send_file",
       "qq_send_forward",
       "qq_send_poke",
-      "qq_sticker_list",
+      "qq_list_stickers",
       "qq_send_sticker",
       "qq_collect_sticker",
       "qq_end_turn",
+      "qq_create_schedule",
+      "qq_list_schedules",
+      "qq_delete_schedule",
+      "qq_update_schedule",
       "qq_napcat_api",
       "qq_group_history",
       "qq_thinking"
     ],
-    "skills": []
+    "skills": [
+      "qq-chat"
+    ]
   }
 }

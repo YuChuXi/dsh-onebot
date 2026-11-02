@@ -1086,6 +1086,32 @@ export class InboundPipeline {
     await this.ctx.dispatchFollowup(chatId, formatRecords(records), 'admin', SYSTEM_NICKNAME)
     return true
   }
+
+  /**
+   * 定时唤醒：取该群/私聊的上文（只读，不推进水位），末尾追加一条
+   * 系统提醒后投递回合。定时挂在群/私聊上，因此与当前绑定哪个会话无关。
+   *
+   * Args:
+   *   chatId (ChatId): 定时绑定的群或私聊。
+   *   note (string): 到点要提醒的内容。
+   *
+   * Returns:
+   *   Promise<void>: 投递完成。
+   *
+   * Callers:
+   *   - `src/bridge/index.ts`：TimerRunner 的 deliver 回调。
+   */
+  async wakeWithNote(chatId: ChatId, note: string): Promise<void> {
+    const { kind, target } = splitChatId(chatId)
+    const window = await this.recentMessages(chatId, kind === 'group' ? target : '', undefined, true)
+    const records: ConversationRecord[] = []
+    for (const entry of window.entries) {
+      if (entry.notice !== undefined) records.push(entry.notice)
+      else if (entry.message !== undefined) records.push(await this.recordOf(entry.message, chatId))
+    }
+    records.push(systemRecord('定时提醒：' + note, formatClock(this.now())))
+    await this.ctx.dispatchFollowup(chatId, formatRecords(records), 'admin', SYSTEM_NICKNAME)
+  }
 }
 
 /** 上文窗口的一条：真人消息或系统事件，两者都带秒级时间。 */

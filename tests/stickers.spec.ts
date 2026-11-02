@@ -91,10 +91,10 @@ function makeHarness() {
   return { calls, mediaDir, tool, sent, exec }
 }
 
-describe('qq_sticker_list', () => {
+describe('qq_list_stickers', () => {
   it('列出收藏表情：序号与 URL，默认不下载', async () => {
     const h = makeHarness()
-    const result = await h.tool('qq_sticker_list').execute({}, {}) as { count: number; faces: Array<Record<string, unknown>> }
+    const result = await h.tool('qq_list_stickers').execute({}, {}) as { count: number; faces: Array<Record<string, unknown>> }
     expect(result.count).toBe(2)
     expect(result.faces).toEqual([
       { index: 1, url: STICKERS[0] },
@@ -105,7 +105,7 @@ describe('qq_sticker_list', () => {
 
   it('preview：把前 N 张下载到本机并带路径', async () => {
     const h = makeHarness()
-    const result = await h.tool('qq_sticker_list').execute({ preview: 1 }, {}) as { faces: Array<Record<string, unknown>> }
+    const result = await h.tool('qq_list_stickers').execute({ preview: 1 }, {}) as { faces: Array<Record<string, unknown>> }
     expect(result.faces[0].path).toBe(h.mediaDir + '/sticker.gif')
     expect(result.faces[1].path).toBeUndefined()
   })
