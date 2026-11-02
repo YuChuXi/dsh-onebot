@@ -13,7 +13,7 @@ import type { Segment } from './segments.js';
 export interface MessageRecord {
     /** 发送方 QQ（协议给的数字 id，不是发送方控制的文本）。 */
     qq: string;
-    /** 经过白名单清洗的显示名。 */
+    /** 发送方显示名：群名片优先，其次昵称，最后 QQ 号。 */
     nickname: string;
     /** OneBot message_id。 */
     id?: string;
@@ -52,8 +52,7 @@ export declare const SYSTEM_QQ = "0";
 /** 插件自己写的说明记录的显示名。 */
 export declare const SYSTEM_NICKNAME = "\u7CFB\u7EDF";
 /**
- * 由原始字段造一条记录。显示名在这里再清洗一次，即使调用方漏了白名单也不会
- * 把换行或标记带进记录；群角色只保留 owner / admin。
+ * 由原始字段造一条记录。显示名按调用方给的值写入；群角色只保留 owner / admin。
  *
  * Args:
  *   fields (object): qq、nickname，以及可选的 id / time / role / message。

@@ -43,7 +43,7 @@ export interface NormalizedInbound {
     message: RawMessage;
     /** 事件自身的 message_id（没有就不做去重）。 */
     messageId?: string;
-    /** 发送方原始显示名（尚未清洗）；notice 为空。 */
+    /** 发送方显示名（群名片优先，其次昵称，最后 QQ 号）；notice 为空。 */
     nickname: string;
     /** 是否指向机器人本人（等同一次 @）；不指向的 notice 只进入上下文，不唤醒回合。 */
     wakes: boolean;

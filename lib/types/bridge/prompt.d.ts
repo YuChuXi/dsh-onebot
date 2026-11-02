@@ -15,7 +15,7 @@ import type { ChatId } from '../chat/index.js';
  * Args:
  *   chatId (ChatId): 会话 id；决定提示词里的群号 / 对方 QQ。
  *   restrictedMembers (boolean): 是否包含受限成员约束。
- *   extraPrompt (string): 附加提示词（人设、背景、语言风格等），原样追加在段落末尾；空串不追加。
+ *   extraPrompt (string): 附加提示词（人设、背景、语言风格等）；去除首尾空白后追加在段落末尾，空串不追加。
  *
  * Returns:
  *   string: 通道提示词段落。
