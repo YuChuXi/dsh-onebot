@@ -13,6 +13,8 @@ import type { AccessPolicyConfig } from '../chat/index.js';
 import type { TraceSink } from '../ops/trace.js';
 import type { InboundRecorder } from '../ops/record.js';
 import type { InjectChannel } from '../inbound/inject.js';
+/** 思考强度档位；default = 跟随部署默认。 */
+export type ThinkingLevel = 'off' | 'low' | 'high' | 'max' | 'default';
 /** Resolved runtime configuration for the bridge. */
 export interface BridgeConfig {
     botQQ: string;
@@ -40,6 +42,10 @@ export interface BridgeConfig {
     extraPromptPrivate: string;
     /** 群聊附加提示词：追加在通道提示词末尾；留空不注入。 */
     extraPromptGroup: string;
+    /** 私聊新建会话的思考强度；default = 跟随部署默认。 */
+    thinkingPrivate?: ThinkingLevel;
+    /** 群聊新建会话的思考强度；default = 跟随部署默认。 */
+    thinkingGroup?: ThinkingLevel;
     mediaDir: string;
     maxImageBytes: number;
     maxVoiceBytes: number;

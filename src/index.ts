@@ -131,6 +131,10 @@ export interface Config {
   extraPromptPrivate: string
   /** 群聊附加提示词：人设、背景、语言风格等，原样注入系统提示词；留空不注入。 */
   extraPromptGroup: string
+  /** 私聊新建会话的思考强度；default = 跟随部署默认。 */
+  thinkingPrivate: 'off' | 'low' | 'high' | 'max' | 'default'
+  /** 群聊新建会话的思考强度；default = 跟随部署默认。 */
+  thinkingGroup: 'off' | 'low' | 'high' | 'max' | 'default'
   mediaDir: string
   tempTtlHours: number
   outboundImageMaxBytes: number
@@ -251,6 +255,10 @@ export const Config: Z<Config> = z.object({
     .description('私聊附加提示词：人设、背景、语言风格等，原样注入系统提示词；留空不注入'),
   extraPromptGroup: z.string().default('')
     .description('群聊附加提示词：人设、背景、语言风格等，原样注入系统提示词；留空不注入'),
+  thinkingPrivate: z.union([z.const('off'), z.const('low'), z.const('high'), z.const('max'), z.const('default')]).default('default')
+    .description('私聊新建会话的思考强度：off/low/high/max；default=跟随部署默认。已有会话保留自己的选择'),
+  thinkingGroup: z.union([z.const('off'), z.const('low'), z.const('high'), z.const('max'), z.const('default')]).default('default')
+    .description('群聊新建会话的思考强度：off/low/high/max；default=跟随部署默认。已有会话保留自己的选择'),
   mediaDir: z.string().default('')
     .description('入站媒体与映射文件目录；留空默认 <dsh-home>/media/onebot'),
   tempTtlHours: z.number().default(6)
@@ -455,6 +463,8 @@ export function apply(ctx: Context, config: Config): void {
       restrictedMemberPrefix: config.restrictedMemberPrefix,
       extraPromptPrivate: config.extraPromptPrivate,
       extraPromptGroup: config.extraPromptGroup,
+      thinkingPrivate: config.thinkingPrivate,
+      thinkingGroup: config.thinkingGroup,
       mediaDir,
       maxImageBytes: config.outboundImageMaxBytes,
       maxVoiceBytes: config.maxVoiceBytes,

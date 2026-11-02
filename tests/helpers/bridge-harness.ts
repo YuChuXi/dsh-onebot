@@ -16,6 +16,7 @@ import WebSocket from 'ws'
 
 import { OneBotConnection } from '../../src/onebot/connection.js'
 import { ChatBridge } from '../../src/bridge/index.js'
+import type { ThinkingLevel } from '../../src/bridge/config.js'
 import { MediaStore } from '../../src/media/store.js'
 import { Transcriber } from '../../src/media/stt.js'
 import { TraceSink } from '../../src/ops/trace.js'
@@ -28,13 +29,13 @@ import { InjectChannel } from '../../src/inbound/inject.js'
  * model/selection event the host's AgentModel appends. Selections keep every
  * field the bridge wrote (reasoningEffort included) so qq_thinking assertions
  * can read back the full selection object. */
-function makeFakeModel(agentOptions?: { provider?: string; model?: string }) {
+function makeFakeModel(agentOptions?: { provider?: string; model?: string; reasoningEffort?: string }) {
   type Selection = { provider: string; model: string; reasoningEffort?: string }
   const selections: Selection[] = []
   return {
     current: (): Selection | undefined => selections[selections.length - 1]
       ?? (agentOptions?.provider !== undefined && agentOptions?.model !== undefined
-        ? { provider: agentOptions.provider, model: agentOptions.model }
+        ? { provider: agentOptions.provider, model: agentOptions.model, ...(agentOptions.reasoningEffort !== undefined ? { reasoningEffort: agentOptions.reasoningEffort } : {}) }
         : undefined),
     select: (next: Selection) => { selections.push({ ...next }) },
     selections,
@@ -54,16 +55,19 @@ export function makeFakeAgents(
     channelSkills?: string[]
     /** 注册到会话作用域的工具定义（测试可像模型一样调用它们发言）。 */
     tools?: Array<{ name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }>
+    /** agents.create 收到的初始模型选项（思考强度接线断言）。 */
+    createdAgentOptions?: Array<{ provider?: string; model?: string; reasoningEffort?: string }>
   },
   opts?: { failCreateFor?: string; resumeOk?: boolean; createDelayMs?: number },
 ) {
   const disposed: string[] = []
   const agents = {
-    create: vi.fn(async (options: { sessionId: string; meta?: { cwd?: string; agentPreset?: string }; agentOptions?: { provider?: string; model?: string }; setup?: (agentCtx: unknown) => unknown }) => {
+    create: vi.fn(async (options: { sessionId: string; meta?: { cwd?: string; agentPreset?: string }; agentOptions?: { provider?: string; model?: string; reasoningEffort?: string }; setup?: (agentCtx: unknown) => unknown }) => {
       if (opts?.createDelayMs !== undefined) await new Promise(resolve => setTimeout(resolve, opts.createDelayMs))
       const sessionId = String(options.sessionId)
       sessionIds.push(sessionId)
       captured.createdMeta?.push({ ...options.meta })
+      captured.createdAgentOptions?.push({ ...options.agentOptions })
       if (opts?.failCreateFor !== undefined && sessionId === opts.failCreateFor) {
         throw new Error('session "' + sessionId + '" already has a persisted log on disk that does not match this live session (id collision)')
       }
@@ -112,7 +116,7 @@ export function makeFakeAgents(
       return { agent, dispose: vi.fn(async () => { disposed.push(sessionId) }) }
     }),
     disposed,
-    resume: vi.fn(async (options: { resumeSessionId: string; agentOptions?: { provider?: string; model?: string }; setup?: (agentCtx: unknown) => unknown }) => {
+    resume: vi.fn(async (options: { resumeSessionId: string; agentOptions?: { provider?: string; model?: string; reasoningEffort?: string }; setup?: (agentCtx: unknown) => unknown }) => {
       if (opts?.resumeOk !== true) throw new Error('not persisted')
       const sessionId = String(options.resumeSessionId)
       sessionIds.push(sessionId)
@@ -145,7 +149,7 @@ export function makeFakeAgents(
 }
 
 /** Full bridge + WS harness: inbound via real WebSocket, outbound captured. */
-export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: string; maxImageBytes?: number; resumeOk?: boolean; createDelayMs?: number; transcriber?: Transcriber; trace?: TraceSink; ignoreSelf?: boolean; recorder?: InboundRecorder; inject?: InjectChannel; steerEnabled?: boolean; steerAllMembers?: boolean; steerAllowRestricted?: boolean; steerNotice?: boolean; log?: (level: string, message: string) => void }) {
+export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: string; maxImageBytes?: number; resumeOk?: boolean; createDelayMs?: number; transcriber?: Transcriber; trace?: TraceSink; ignoreSelf?: boolean; recorder?: InboundRecorder; inject?: InjectChannel; steerEnabled?: boolean; steerAllMembers?: boolean; steerAllowRestricted?: boolean; steerNotice?: boolean; log?: (level: string, message: string) => void; defaultModel?: () => { provider: string; model: string; reasoningEffort?: string }; thinkingPrivate?: ThinkingLevel; thinkingGroup?: ThinkingLevel }) {
   const ctx = new Context()
   const sessionIds: string[] = []
   const captured = {
@@ -155,6 +159,7 @@ export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: st
     channelSections: [] as string[],
     channelSkills: [] as string[],
     tools: [] as Array<{ name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }>,
+    createdAgentOptions: [] as Array<{ provider?: string; model?: string; reasoningEffort?: string }>,
   }
   const agents = makeFakeAgents(sessionIds, captured, opts)
   const sessions = { flush: vi.fn(async () => undefined) }
@@ -171,7 +176,7 @@ export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: st
     sessions: sessions as never,
     agentPresets: undefined as never,
     workspaceRegistry: undefined as never,
-    defaultModel: undefined,
+    defaultModel: opts?.defaultModel,
     config: {
       botQQ: '10002', ignoreSelf: opts?.ignoreSelf ?? false, requireMention: true,
       sendErrorNotice: true, restrictedMemberPrefix: false,
@@ -179,6 +184,8 @@ export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: st
       mediaDir, maxImageBytes: opts?.maxImageBytes ?? 8 * 1024 * 1024,
       maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
       agentPreset: 'standard', workspacePath: mediaDir,
+      ...(opts?.thinkingPrivate !== undefined ? { thinkingPrivate: opts.thinkingPrivate } : {}),
+      ...(opts?.thinkingGroup !== undefined ? { thinkingGroup: opts.thinkingGroup } : {}),
       // 插话四开关（缺省 = 不插话、仅管理员、受限成员放行、插话回执开）。
       ...(opts?.steerEnabled !== undefined ? { steerEnabled: opts.steerEnabled } : {}),
       ...(opts?.steerAllMembers !== undefined ? { steerAllMembers: opts.steerAllMembers } : {}),

@@ -11,8 +11,9 @@
  * `retired` 的派生索引，只用于 O(1) 的 id 复用判定。
  * @module dsh-onebot/registry
  */
-import type { Agent, AgentRegistry, AgentSetup, ModelSelection } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentOptions, AgentRegistry, AgentSetup, ModelSelection } from '@deepseek-ai/dsh-agent'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionId as makeSessionId } from '@deepseek-ai/dsh-session'
 import type { Context } from '@deepseek-ai/cordis'
@@ -192,7 +193,7 @@ export interface RegistryDeps {
   agentPresets: AgentPresetsLike | undefined
   defaultModel: (() => ModelSelection | undefined) | undefined
   /** The only config fields the registry reads. */
-  config: Pick<BridgeConfig, 'mediaDir' | 'workspacePath' | 'agentPreset' | 'restrictedMemberPrefix' | 'maxImageBytes' | 'maxVoiceBytes' | 'maxFileBytes' | 'chatIdleEvictDays'>
+  config: Pick<BridgeConfig, 'mediaDir' | 'workspacePath' | 'agentPreset' | 'restrictedMemberPrefix' | 'maxImageBytes' | 'maxVoiceBytes' | 'maxFileBytes' | 'chatIdleEvictDays' | 'thinkingPrivate' | 'thinkingGroup'>
   log(level: 'info' | 'warn' | 'error' | 'debug', message: string): void
   /** Bridge stop flag (guards the resume loop). */
   isStopping(): boolean
@@ -309,17 +310,34 @@ export class ChatRegistry {
 
   // ------------------------------------------------------------ chat lifecycle
 
-  /** C2: default-model wiring shared by the create and resume assembly paths
-   * — the agent options for the registry call only (the deployment default
-   * rides in as `provider`/`model`; dsh 0.2.2 carries the mutable selection
-   * itself via `agent.model`, seeded from these options). Undefined fields
-   * when the deployment has no default model. */
-  private modelWiring(): { provider?: string; model?: string } {
+  /**
+   * 新建 / 恢复会话的初始模型选项：部署默认提供 provider / model 与思考强度，
+   * 再按会话类型用 thinkingPrivate / thinkingGroup 覆盖；default 表示沿用部署
+   * 默认档位。恢复会话时，宿主的持久化选择优先于这些初始选项。
+   *
+   * Args:
+   *   chatId (ChatId): 目标会话；决定取群聊还是私聊的思考强度。
+   *
+   * Returns:
+   *   AgentOptions: 传给 agents.create / agents.resume 的模型选项。
+   *
+   * Callers:
+   *   - `createChat`。
+   *   - `resumeChat`。
+   */
+  private modelWiring(chatId: ChatId): AgentOptions {
     const selection = this.deps.defaultModel?.()
-    const agentOptions: { provider?: string; model?: string } = {}
+    const agentOptions: AgentOptions = {}
     if (selection !== undefined) {
       agentOptions.provider = selection.provider
       agentOptions.model = selection.model
+      if (selection.reasoningEffort !== undefined) agentOptions.reasoningEffort = selection.reasoningEffort
+    }
+    const configured = splitChatId(chatId).kind === 'group'
+      ? this.deps.config.thinkingGroup
+      : this.deps.config.thinkingPrivate
+    if (configured !== undefined && configured !== 'default') {
+      agentOptions.reasoningEffort = ReasoningEffortId(configured)
     }
     return agentOptions
   }
@@ -408,7 +426,7 @@ export class ChatRegistry {
       this.retire(chatId, sessionId, false)
       sessionId = this.freshSessionId(chatId)
     }
-    const agentOptions = this.modelWiring()
+    const agentOptions = this.modelWiring(chatId)
     const cwd = this.effectiveCwd(chatId)
     const presetId = await this.resolvePresetId()
     const meta: { cwd: string; agentPreset?: string } = { cwd }
@@ -702,7 +720,7 @@ export class ChatRegistry {
 
   /** Resume one persisted chat from its recorded session id. */
   private async resumeChat(chatId: ChatId, sessionId: string): Promise<ChatAgent> {
-    const agentOptions = this.modelWiring()
+    const agentOptions = this.modelWiring(chatId)
     const recordedPreset = await this.recordedPresetFor(makeSessionId(sessionId))
     const handle = await this.deps.agents.resume({
       resumeSessionId: makeSessionId(sessionId),

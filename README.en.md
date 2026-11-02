@@ -184,6 +184,8 @@ default). Common options:
 | `steerAllMembers` | `false` | steer eligibility (active while the steer switch is on): on = every member may steer; off (default) = admins only. Messages from senders without eligibility take the queue path (enqueue + queue notice). Editable in the settings page behavior group; applies after a hot restart |
 | `steerAllowRestricted` | `true` | restricted-member steer (active while the steer switch is on): on (default) = group members under the soft limit (non-admin with `restrictedMemberPrefix` on) may also steer; off = restricted members always take the queue path. Editable in the settings page behavior group; applies after a hot restart |
 | `steerNotice` | `true` | steer notice: reply「已作为补充指令提交给当前任务」when a message is steered in; off = silent steer. Editable in the settings page behavior group; applies after a hot restart |
+| `thinkingPrivate` | `default` | thinking effort for new private-chat sessions: `off`/`low`/`high`/`max`; `default` follows the deployment default. Existing sessions keep their own selection |
+| `thinkingGroup` | `default` | thinking effort for new group-chat sessions; same values and rules as `thinkingPrivate` |
 | `dmPolicy` | `open` | DM policy: `open`(admins only)/`allowlist`/`disabled` |
 | `groupPolicy` | `open` | group policy: `open`(everyone)/`allowlist`/`disabled` |
 | `restrictedMemberPrefix` | `true` | Prefix non-admin group messages with `[受限用户:仅问答]` (soft restriction) |
@@ -235,13 +237,13 @@ The dsh Web GUI settings page exposes this plugin's configuration visually (a ho
 `onebotSettings` that writes the config override of the `dsh-onebot` entry in the profile-level
 `cordis.patch.yml` — the same persistence layer as a hand-edited patch and the host's native settings page).
 
-### Four groups, 33 keys
+### Four groups, 35 keys
 
 | Group | Keys |
 |---|---|
 | connection | `mode`, `host`, `port`, `url`, `accessToken`, `botQQ`, `workspacePath` |
 | permissions | `requireMention`, `adminUsers`, `dmPolicy`, `groupPolicy`, `allowAllUsers`, `allowFrom`, `groupAllowFrom` |
-| behavior | `sendErrorNotice`, `outboundIntervalBaseMs`, `outboundIntervalPerCharMs`, `outboundIntervalJitterPct`, `recentMessages`, `steerEnabled`, `steerAllMembers`, `steerAllowRestricted`, `steerNotice`, `sleepMode`, `sleepStart`, `sleepEnd`, `extraPromptPrivate`, `extraPromptGroup` |
+| behavior | `sendErrorNotice`, `outboundIntervalBaseMs`, `outboundIntervalPerCharMs`, `outboundIntervalJitterPct`, `recentMessages`, `steerEnabled`, `steerAllMembers`, `steerAllowRestricted`, `steerNotice`, `sleepMode`, `sleepStart`, `sleepEnd`, `extraPromptPrivate`, `extraPromptGroup`, `thinkingPrivate`, `thinkingGroup` |
 | diagnostics | `traceEnabled`, `recordInbound`, `inboxRedact`, `injectEnabled`, `injectDryRun` |
 
 `accessToken` is a password-style input in the settings page; snapshots redact it on return (no plaintext echo);
@@ -251,7 +253,7 @@ the write side still lands in the patch file as plaintext.
 
 **schema defaults ← bundle/base patch (inherited layer) ← profile override line (what the settings page writes)**;
 within the same layer, later patch entries win. Settings-page keys and a hand-edited patch are the same line in
-the same layer — there are no two competing priorities. Keys outside the 33 (media/STT/performance/
+the same layer — there are no two competing priorities. Keys outside the 35 (media/STT/performance/
 `agentPreset` and other low-frequency keys) get no UI; hand-edit the patch in the same config line.
 
 ### How changes take effect

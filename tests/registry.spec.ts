@@ -994,4 +994,40 @@ describe('ChatRegistry', () => {
     await h.bridge.stop()
     await h.connection.stop()
   }, 30_000)
+
+  it('新建会话按 thinkingPrivate / thinkingGroup 应用思考强度；default 沿用部署默认', async () => {
+    const h = await makeHarness({
+      defaultModel: () => ({ provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' }),
+      thinkingPrivate: 'low',
+      thinkingGroup: 'off',
+    })
+    // 私聊：配置覆盖部署默认档位。
+    h.sendText('你好')
+    await vi.waitFor(() => expect(h.sessionIds).toHaveLength(1))
+    expect(h.captured.createdAgentOptions?.[0]).toEqual({ provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'low' })
+    // 群聊：显式 @ 机器人建会话，应用群聊档位。
+    await h.bridge.handleInbound({
+      post_type: 'message', message_type: 'group', group_id: 20001,
+      user_id: 10001, self_id: 10002,
+      message: [{ type: 'at', data: { qq: '10002' } }, { type: 'text', data: { text: 'hi' } }],
+      sender: { user_id: 10001, nickname: '小明' },
+    } as never)
+    await vi.waitFor(() => expect(h.sessionIds).toHaveLength(2))
+    expect(h.captured.createdAgentOptions?.[1]).toEqual({ provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'off' })
+    h.client.close()
+    await h.bridge.stop()
+    await h.connection.stop()
+
+    // default：沿用部署默认的档位，不被丢弃。
+    const follow = await makeHarness({
+      defaultModel: () => ({ provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' }),
+      thinkingPrivate: 'default',
+    })
+    follow.sendText('你好')
+    await vi.waitFor(() => expect(follow.sessionIds).toHaveLength(1))
+    expect(follow.captured.createdAgentOptions?.[0]).toEqual({ provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' })
+    follow.client.close()
+    await follow.bridge.stop()
+    await follow.connection.stop()
+  }, 30_000)
 })

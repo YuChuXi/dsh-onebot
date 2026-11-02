@@ -50,9 +50,9 @@ import type { WorkspaceRegistryLike } from './bridge/config.js';
 export declare const ENTRY_ID = "dsh-onebot";
 /** Typert Remote 命名空间 = cordis 服务键（T1 §4）。 */
 export declare const NAMESPACE = "onebotSettings";
-/** 快照固定值：33 键均为插件级热重启生效（T1 §5）。 */
+/** 快照固定值：35 键均为插件级热重启生效（T1 §5）。 */
 export declare const REMOTE_EFFECT = "restart";
-/** 设置页 UI 四组 33 键（与 src/index.ts Config schema 的 Config 面向面板的键一一对应）。
+/** 设置页 UI 四组 35 键（与 src/index.ts Config schema 的 Config 面向面板的键一一对应）。
  *  connection/permissions/behavior 三组是连接、权限与行为面；diagnostics（诊断）
  *  组收纳观测/调试布尔键——它们默认关、属观测/调试面，与前三组的使用频率与
  *  风险等级都不同，独立分组让「默认全关的调试开关」一眼可辨。
@@ -63,7 +63,7 @@ export declare const SETTINGS_GROUPS: Readonly<Record<string, readonly string[]>
 export declare const SCHEMA_DEFAULTS: Readonly<Record<string, unknown>>;
 /** 快照返回侧脱敏的键（T1 §3 敏感字段行；写入侧明文落盘属宿主既有行为）。 */
 export declare const SECRET_KEYS: readonly string[];
-/** 全部 33 键（校验与快照的唯一键集；4 枚举 + 5 数字 + 12 布尔 + 9 字符串 + 3 字符串数组）。 */
+/** 全部 35 键（校验与快照的唯一键集；6 枚举 + 5 数字 + 12 布尔 + 9 字符串 + 3 字符串数组）。 */
 export declare const ALL_KEYS: readonly string[];
 /** OnebotSettingsSnapshot（T1 §3 快照结构）。 */
 export interface OnebotSettingsSnapshot {
@@ -71,7 +71,7 @@ export interface OnebotSettingsSnapshot {
     revision: number;
     /** dsh-onebot 条目 fiber 是否 active（fiber.state === 2，同 configEditor.edit 的活性判据）。 */
     entryActive: boolean;
-    /** 33 键生效值；accessToken 脱敏为 ''。 */
+    /** 35 键生效值；accessToken 脱敏为 ''。 */
     config: Record<string, unknown>;
     /** 脱敏键标记：明文是否已配置。 */
     secrets: Array<{

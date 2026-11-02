@@ -137,7 +137,7 @@ export interface RegistryDeps {
     agentPresets: AgentPresetsLike | undefined;
     defaultModel: (() => ModelSelection | undefined) | undefined;
     /** The only config fields the registry reads. */
-    config: Pick<BridgeConfig, 'mediaDir' | 'workspacePath' | 'agentPreset' | 'restrictedMemberPrefix' | 'maxImageBytes' | 'maxVoiceBytes' | 'maxFileBytes' | 'chatIdleEvictDays'>;
+    config: Pick<BridgeConfig, 'mediaDir' | 'workspacePath' | 'agentPreset' | 'restrictedMemberPrefix' | 'maxImageBytes' | 'maxVoiceBytes' | 'maxFileBytes' | 'chatIdleEvictDays' | 'thinkingPrivate' | 'thinkingGroup'>;
     log(level: 'info' | 'warn' | 'error' | 'debug', message: string): void;
     /** Bridge stop flag (guards the resume loop). */
     isStopping(): boolean;
@@ -208,11 +208,21 @@ export declare class ChatRegistry {
     private capSwitchable;
     /** 一个会话重新成为当前绑定时，从退役历史里移除。 */
     private unretire;
-    /** C2: default-model wiring shared by the create and resume assembly paths
-     * — the agent options for the registry call only (the deployment default
-     * rides in as `provider`/`model`; dsh 0.2.2 carries the mutable selection
-     * itself via `agent.model`, seeded from these options). Undefined fields
-     * when the deployment has no default model. */
+    /**
+     * 新建 / 恢复会话的初始模型选项：部署默认提供 provider / model 与思考强度，
+     * 再按会话类型用 thinkingPrivate / thinkingGroup 覆盖；default 表示沿用部署
+     * 默认档位。恢复会话时，宿主的持久化选择优先于这些初始选项。
+     *
+     * Args:
+     *   chatId (ChatId): 目标会话；决定取群聊还是私聊的思考强度。
+     *
+     * Returns:
+     *   AgentOptions: 传给 agents.create / agents.resume 的模型选项。
+     *
+     * Callers:
+     *   - `createChat`。
+     *   - `resumeChat`。
+     */
     private modelWiring;
     /** C2: the AgentSetup closure shared by the create and resume assembly
      * paths. The only difference between the callers is the preset: a resumed

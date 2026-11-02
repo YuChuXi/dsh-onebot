@@ -56,10 +56,10 @@ import type { WorkspaceRegistryLike } from './bridge/config.js'
 export const ENTRY_ID = 'dsh-onebot'
 /** Typert Remote 命名空间 = cordis 服务键（T1 §4）。 */
 export const NAMESPACE = 'onebotSettings'
-/** 快照固定值：33 键均为插件级热重启生效（T1 §5）。 */
+/** 快照固定值：35 键均为插件级热重启生效（T1 §5）。 */
 export const REMOTE_EFFECT = 'restart'
 
-/** 设置页 UI 四组 33 键（与 src/index.ts Config schema 的 Config 面向面板的键一一对应）。
+/** 设置页 UI 四组 35 键（与 src/index.ts Config schema 的 Config 面向面板的键一一对应）。
  *  connection/permissions/behavior 三组是连接、权限与行为面；diagnostics（诊断）
  *  组收纳观测/调试布尔键——它们默认关、属观测/调试面，与前三组的使用频率与
  *  风险等级都不同，独立分组让「默认全关的调试开关」一眼可辨。
@@ -68,7 +68,7 @@ export const REMOTE_EFFECT = 'restart'
 export const SETTINGS_GROUPS: Readonly<Record<string, readonly string[]>> = {
   connection: ['mode', 'host', 'port', 'url', 'accessToken', 'botQQ', 'workspacePath'],
   permissions: ['requireMention', 'adminUsers', 'dmPolicy', 'groupPolicy', 'allowAllUsers', 'allowFrom', 'groupAllowFrom'],
-  behavior: ['sendErrorNotice', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages', 'steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'steerNotice', 'sleepMode', 'sleepStart', 'sleepEnd', 'extraPromptPrivate', 'extraPromptGroup'],
+  behavior: ['sendErrorNotice', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages', 'steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'steerNotice', 'sleepMode', 'sleepStart', 'sleepEnd', 'extraPromptPrivate', 'extraPromptGroup', 'thinkingPrivate', 'thinkingGroup'],
   diagnostics: ['traceEnabled', 'recordInbound', 'inboxRedact', 'injectEnabled', 'injectDryRun'],
 }
 
@@ -103,6 +103,9 @@ export const SCHEMA_DEFAULTS: Readonly<Record<string, unknown>> = {
   // 附加提示词：按私聊/群聊分列，留空不注入。
   extraPromptPrivate: '',
   extraPromptGroup: '',
+  // 新建会话的思考强度：默认跟随部署默认。
+  thinkingPrivate: 'default',
+  thinkingGroup: 'default',
   // 插话四开关（面板复选框；默认排队，仅管理员可插话，受限成员放行，插话回执开）。
   steerEnabled: false,
   steerAllMembers: false,
@@ -119,11 +122,16 @@ export const SCHEMA_DEFAULTS: Readonly<Record<string, unknown>> = {
 /** 快照返回侧脱敏的键（T1 §3 敏感字段行；写入侧明文落盘属宿主既有行为）。 */
 export const SECRET_KEYS: readonly string[] = ['accessToken']
 
+/** 思考强度档位（与 src/index.ts Config schema 的枚举一致）。 */
+const THINKING_LEVELS: readonly string[] = ['off', 'low', 'high', 'max', 'default']
+
 const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
   mode: ['reverse', 'forward'],
   dmPolicy: ['open', 'allowlist', 'disabled'],
   groupPolicy: ['open', 'allowlist', 'disabled'],
   sleepMode: ['window', 'peak'],
+  thinkingPrivate: THINKING_LEVELS,
+  thinkingGroup: THINKING_LEVELS,
 }
 const NUMBER_KEYS: readonly string[] = ['port', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages']
 /** 数字键取值范围（port 1–65535、间隔 ≥0；越界在 Remote 层拒绝）。 */
@@ -144,7 +152,7 @@ const BOOLEAN_KEYS: readonly string[] = [
 ]
 const STRING_KEYS: readonly string[] = ['host', 'url', 'accessToken', 'botQQ', 'workspacePath', 'sleepStart', 'sleepEnd', 'extraPromptPrivate', 'extraPromptGroup']
 const STRING_ARRAY_KEYS: readonly string[] = ['adminUsers', 'allowFrom', 'groupAllowFrom']
-/** 全部 33 键（校验与快照的唯一键集；4 枚举 + 5 数字 + 12 布尔 + 9 字符串 + 3 字符串数组）。 */
+/** 全部 35 键（校验与快照的唯一键集；6 枚举 + 5 数字 + 12 布尔 + 9 字符串 + 3 字符串数组）。 */
 export const ALL_KEYS: readonly string[] = [
   ...Object.keys(ENUM_KEYS), ...NUMBER_KEYS, ...BOOLEAN_KEYS, ...STRING_KEYS, ...STRING_ARRAY_KEYS,
 ]
@@ -155,7 +163,7 @@ export interface OnebotSettingsSnapshot {
   revision: number
   /** dsh-onebot 条目 fiber 是否 active（fiber.state === 2，同 configEditor.edit 的活性判据）。 */
   entryActive: boolean
-  /** 33 键生效值；accessToken 脱敏为 ''。 */
+  /** 35 键生效值；accessToken 脱敏为 ''。 */
   config: Record<string, unknown>
   /** 脱敏键标记：明文是否已配置。 */
   secrets: Array<{ path: string[]; set: boolean }>

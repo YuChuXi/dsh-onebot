@@ -134,6 +134,10 @@ export interface Config {
     extraPromptPrivate: string;
     /** 群聊附加提示词：人设、背景、语言风格等，原样注入系统提示词；留空不注入。 */
     extraPromptGroup: string;
+    /** 私聊新建会话的思考强度；default = 跟随部署默认。 */
+    thinkingPrivate: 'off' | 'low' | 'high' | 'max' | 'default';
+    /** 群聊新建会话的思考强度；default = 跟随部署默认。 */
+    thinkingGroup: 'off' | 'low' | 'high' | 'max' | 'default';
     mediaDir: string;
     tempTtlHours: number;
     outboundImageMaxBytes: number;

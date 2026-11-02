@@ -173,6 +173,8 @@ WS 连接、图片下载、文件解析都依赖这条网络通路；NapCat 与 
 | `steerAllMembers` | `false` | 插话资格（插话开关打开时生效）：开=所有成员都能插话；关（默认）=仅管理员。不具备资格的消息按排队处理（入队+排队提示）。设置页 behavior 组可改，热重启生效 |
 | `steerAllowRestricted` | `true` | 受限成员插话（插话开关打开时生效）：开（默认）=群内受限成员（非管理员且 `restrictedMemberPrefix` 开）也能插话；关=受限成员始终排队。设置页 behavior 组可改，热重启生效 |
 | `steerNotice` | `true` | 插话提示：插话成功时回一句「已作为补充指令提交给当前任务」；关=静默插话。设置页 behavior 组可改，热重启生效 |
+| `thinkingPrivate` | `default` | 私聊新建会话的思考强度：`off`/`low`/`high`/`max`；`default` = 跟随部署默认。已有会话保留自己的选择，不会被本项覆盖 |
+| `thinkingGroup` | `default` | 群聊新建会话的思考强度，取值与生效规则同 `thinkingPrivate` |
 | `sendErrorNotice` | `true` | 一轮运行出错时向用户发送 ⚠️ 错误提示 |
 | `outboundIntervalBaseMs` | `300` | 同一会话相邻两条出站消息的固定间隔（毫秒） |
 | `outboundIntervalPerCharMs` | `60` | 每条消息按字数追加的间隔（毫秒/字） |
@@ -224,13 +226,13 @@ WS 连接、图片下载、文件解析都依赖这条网络通路；NapCat 与 
 dsh Web GUI 的设置页提供本插件的可视化配置（host-plane Remote `onebotSettings`，写入 profile 层
 `cordis.patch.yml` 中 `dsh-onebot` 条目的 config 覆盖行——与手改 patch、宿主原生设置页是同一个持久层）。
 
-### 四组 33 键
+### 四组 35 键
 
 | 组 | 键 |
 |---|---|
 | connection（连接） | `mode`、`host`、`port`、`url`、`accessToken`、`botQQ`、`workspacePath` |
 | permissions（权限） | `requireMention`、`adminUsers`、`dmPolicy`、`groupPolicy`、`allowAllUsers`、`allowFrom`、`groupAllowFrom` |
-| behavior（行为） | `sendErrorNotice`、`outboundIntervalBaseMs`、`outboundIntervalPerCharMs`、`outboundIntervalJitterPct`、`recentMessages`、`steerEnabled`、`steerAllMembers`、`steerAllowRestricted`、`steerNotice`、`sleepMode`、`sleepStart`、`sleepEnd`、`extraPromptPrivate`、`extraPromptGroup` |
+| behavior（行为） | `sendErrorNotice`、`outboundIntervalBaseMs`、`outboundIntervalPerCharMs`、`outboundIntervalJitterPct`、`recentMessages`、`steerEnabled`、`steerAllMembers`、`steerAllowRestricted`、`steerNotice`、`sleepMode`、`sleepStart`、`sleepEnd`、`extraPromptPrivate`、`extraPromptGroup`、`thinkingPrivate`、`thinkingGroup` |
 | diagnostics（诊断） | `traceEnabled`、`recordInbound`、`inboxRedact`、`injectEnabled`、`injectDryRun` |
 
 `accessToken` 在设置页做密码型输入，快照返回侧脱敏（不回显明文）；写入侧仍在 patch 文件明文落盘。
@@ -238,7 +240,7 @@ dsh Web GUI 的设置页提供本插件的可视化配置（host-plane Remote `o
 ### 与 patch config 的优先级
 
 **schema 默认值 ← bundle/底层 patch（继承层） ← profile 覆盖行（设置页写这里）**；同一层内后写的 patch
-条目胜出。设置页键与手改 patch 是同一层的同一行，不存在两套优先级。四组 33 键之外的键
+条目胜出。设置页键与手改 patch 是同一层的同一行，不存在两套优先级。四组 35 键之外的键
 （media/STT/性能/`agentPreset` 等低频键）不设 UI，仍在同一行 config 手改 patch。
 
 ### 生效方式
