@@ -1,6 +1,6 @@
 /**
  * Model-facing tools for the OneBot channel: the send family (tools/send),
- * the whitelisted NapCat API proxy, group history and thinking control.
+ * the whitelisted NapCat API proxy, group history and per-chat model control.
  * Tools infer the target chat from the calling agent's session; an explicit
  * chat_id overrides.
  * @module dsh-onebot/tools

@@ -13,6 +13,7 @@ import type { OneBotEvent } from '../onebot/connection.js';
 import type { ChatId } from '../chat/index.js';
 import type { OutboundSegment, SendOptions } from '../outbound/index.js';
 import type { ChatAgent } from '../registry/index.js';
+import type { ChatModelBinding } from './config.js';
 import { TimerRunner } from '../timers/index.js';
 /** T2 (P1): the queue notice sent to a chat when a message arrives while its
  * task is running under the default 'queue' policy — at most ONE per running
@@ -78,8 +79,9 @@ export declare class ChatBridge {
      * channels) are trusted by default (A1 scoping). Unknown states fail closed
      * as member. */
     canEditFiles(sessionId: string): boolean;
-    /** qq_thinking: the live agent of one chat — the agent-owned model selection
-     * (dsh 0.2.2 `agent.model`) is the only live view of a chat's thinking level.
+    /** qq_model: the live agent of one chat — the agent-owned model selection
+     * (dsh 0.2.2 `agent.model`) is the only live view of a chat's model route
+     * and thinking level.
      *
      * Args:
      *   chatId (ChatId): 目标会话。
@@ -88,27 +90,55 @@ export declare class ChatBridge {
      *   ChatAgent['agent'] | undefined: 会话在线时返回该会话的 agent，否则 undefined。
      *
      * Callers:
-     *   - `src/tools/index.ts:registerTools`（qq_thinking 的 get/set 路径）。
+     *   - `src/tools/index.ts:registerTools`（qq_model 的 get/set 路径）。
      */
     agentOf(chatId: ChatId): ChatAgent['agent'] | undefined;
-    /** qq_thinking: the deployment default model selection.
+    /** qq_model: the deployment default model selection.
      *
      * Returns:
      *   ModelSelection | undefined: 部署默认选择；未配置默认模型时 undefined。
      *
      * Callers:
-     *   - `src/tools/index.ts:registerTools`（qq_thinking 的 get 与 set default 路径）。
+     *   - `src/tools/index.ts:registerTools`（qq_model 的 get 与 set default 路径）。
      */
     deploymentModel(): ModelSelection | undefined;
-    /** qq_thinking: the deployment default-model store (saveSelection port).
+    /** qq_model: the deployment default-model store (saveSelection port).
      *
      * Returns:
      *   AgentDefaultModelLike | undefined: 宿主未提供该服务时 undefined。
      *
      * Callers:
-     *   - `src/tools/index.ts:registerTools`（qq_thinking 的 set default 路径）。
+     *   - `src/tools/index.ts:registerTools`（qq_model 的 set default 路径）。
      */
     defaultModelStore(): AgentDefaultModelLike | undefined;
+    /**
+     * 该 provider/model 接受的思考强度 id；undefined = 能力未知（调用方不据此
+     * 拒绝）。
+     *
+     * Args:
+     *   provider (string): 提供商路由。
+     *   model (string): 模型 id。
+     *
+     * Returns:
+     *   Promise<readonly string[] | undefined>: 可用档位；空数组 = 不支持思考强度。
+     *
+     * Callers:
+     *   - `src/tools/index.ts:registerTools`（qq_model 的 get/set 校验）。
+     */
+    reasoningEfforts(provider: string, model: string): Promise<readonly string[] | undefined>;
+    /**
+     * qq_model: 配置里为该 chat 指定的模型（精确键优先于类型通配键）。
+     *
+     * Args:
+     *   chatId (ChatId): 目标会话。
+     *
+     * Returns:
+     *   ChatModelBinding | undefined: 配置未指定时 undefined。
+     *
+     * Callers:
+     *   - `src/tools/index.ts:registerTools`（qq_model 的 get）。
+     */
+    configuredModel(chatId: ChatId): ChatModelBinding | undefined;
     /**
      * Outbound media fence roots for one agent session's current turn (M1-A3b):
      * the plugin media dir always, plus the chat's workspace directory when the

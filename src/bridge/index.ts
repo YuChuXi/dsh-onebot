@@ -36,6 +36,7 @@ import { OutboundPipeline } from '../outbound/index.js'
 import type { OutboundSegment, SendOptions } from '../outbound/index.js'
 import { ChatRegistry } from '../registry/index.js'
 import type { ChatAgent } from '../registry/index.js'
+import type { ChatModelBinding } from './config.js'
 import { InboundPipeline } from '../inbound/index.js'
 import { TimerRunner } from '../timers/index.js'
 import type { NormalizedInbound } from '../inbound/normalize.js'
@@ -224,8 +225,9 @@ export class ChatBridge {
     return this.chats.get(chatId)?.activeTurnRole === 'admin'
   }
 
-  /** qq_thinking: the live agent of one chat — the agent-owned model selection
-   * (dsh 0.2.2 `agent.model`) is the only live view of a chat's thinking level.
+  /** qq_model: the live agent of one chat — the agent-owned model selection
+   * (dsh 0.2.2 `agent.model`) is the only live view of a chat's model route
+   * and thinking level.
    *
    * Args:
    *   chatId (ChatId): 目标会话。
@@ -234,34 +236,69 @@ export class ChatBridge {
    *   ChatAgent['agent'] | undefined: 会话在线时返回该会话的 agent，否则 undefined。
    *
    * Callers:
-   *   - `src/tools/index.ts:registerTools`（qq_thinking 的 get/set 路径）。
+   *   - `src/tools/index.ts:registerTools`（qq_model 的 get/set 路径）。
    */
   agentOf(chatId: ChatId): ChatAgent['agent'] | undefined {
     return this.chats.get(chatId)?.agent
   }
 
-  /** qq_thinking: the deployment default model selection.
+  /** qq_model: the deployment default model selection.
    *
    * Returns:
    *   ModelSelection | undefined: 部署默认选择；未配置默认模型时 undefined。
    *
    * Callers:
-   *   - `src/tools/index.ts:registerTools`（qq_thinking 的 get 与 set default 路径）。
+   *   - `src/tools/index.ts:registerTools`（qq_model 的 get 与 set default 路径）。
    */
   deploymentModel(): ModelSelection | undefined {
     return this.deps.defaultModel?.()
   }
 
-  /** qq_thinking: the deployment default-model store (saveSelection port).
+  /** qq_model: the deployment default-model store (saveSelection port).
    *
    * Returns:
    *   AgentDefaultModelLike | undefined: 宿主未提供该服务时 undefined。
    *
    * Callers:
-   *   - `src/tools/index.ts:registerTools`（qq_thinking 的 set default 路径）。
+   *   - `src/tools/index.ts:registerTools`（qq_model 的 set default 路径）。
    */
   defaultModelStore(): AgentDefaultModelLike | undefined {
     return this.deps.agentDefaultModel
+  }
+
+  /**
+   * 该 provider/model 接受的思考强度 id；undefined = 能力未知（调用方不据此
+   * 拒绝）。
+   *
+   * Args:
+   *   provider (string): 提供商路由。
+   *   model (string): 模型 id。
+   *
+   * Returns:
+   *   Promise<readonly string[] | undefined>: 可用档位；空数组 = 不支持思考强度。
+   *
+   * Callers:
+   *   - `src/tools/index.ts:registerTools`（qq_model 的 get/set 校验）。
+   */
+  reasoningEfforts(provider: string, model: string): Promise<readonly string[] | undefined> {
+    const catalog = this.deps.llmCatalog
+    return catalog === undefined ? Promise.resolve(undefined) : catalog.resolveReasoningEfforts(provider, model)
+  }
+
+  /**
+   * qq_model: 配置里为该 chat 指定的模型（精确键优先于类型通配键）。
+   *
+   * Args:
+   *   chatId (ChatId): 目标会话。
+   *
+   * Returns:
+   *   ChatModelBinding | undefined: 配置未指定时 undefined。
+   *
+   * Callers:
+   *   - `src/tools/index.ts:registerTools`（qq_model 的 get）。
+   */
+  configuredModel(chatId: ChatId): ChatModelBinding | undefined {
+    return this.registry.configuredModel(chatId)
   }
 
   /**

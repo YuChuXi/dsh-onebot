@@ -13,8 +13,17 @@ import type { AccessPolicyConfig } from '../chat/index.js';
 import type { TraceSink } from '../ops/trace.js';
 import type { InboundRecorder } from '../ops/record.js';
 import type { InjectChannel } from '../inbound/inject.js';
+import type { ModelRoute } from './model-route.js';
 /** 思考强度档位；default = 跟随部署默认。 */
 export type ThinkingLevel = 'off' | 'low' | 'high' | 'max' | 'default';
+/** 某会话类型的模型配置：路由与思考强度各自可缺省（只配档位时不动模型）。 */
+export interface ChatModelBinding {
+    /** 模型路由；未配置 modelPrivate/modelGroup 时缺省。 */
+    provider?: string;
+    model?: string;
+    /** thinking* 配置解析出的档位；缺省 = 模型默认。 */
+    reasoningEffort?: string;
+}
 /** Resolved runtime configuration for the bridge. */
 export interface BridgeConfig {
     botQQ: string;
@@ -46,6 +55,10 @@ export interface BridgeConfig {
     thinkingPrivate?: ThinkingLevel;
     /** 群聊新建会话的思考强度；default = 跟随部署默认。 */
     thinkingGroup?: ThinkingLevel;
+    /** 私聊使用的模型路由；缺省 = 部署默认。 */
+    modelPrivate?: ModelRoute;
+    /** 群聊使用的模型路由；缺省 = 部署默认。 */
+    modelGroup?: ModelRoute;
     mediaDir: string;
     maxImageBytes: number;
     maxVoiceBytes: number;
@@ -163,6 +176,9 @@ export interface AgentDefaultModelLike {
 export interface LlmCatalogPort {
     listProviders(): LlmProviderInfo[];
     listModels(provider: string): Promise<LlmModelInfo[]>;
+    /** 该 provider/model 接受的思考强度 id；空数组 = 不支持思考强度，
+     * undefined = 适配器未暴露能力（不据此拒绝）。 */
+    resolveReasoningEfforts(provider: string, model: string): Promise<readonly string[] | undefined>;
 }
 /** Session-event feed port (M2-C5b): the narrowed event-bus surface the bridge
  * subscribes to, replacing the whole-plugin Context. index.ts satisfies it

@@ -868,7 +868,7 @@ describe('ChatRegistry', () => {
     // The mapping file the first bridge wrote is the resume source.
     expect(resume).toHaveBeenCalledTimes(1)
     expect(resume.mock.calls[0][0].resumeSessionId).toBe(recordedSessionId)
-    // Model is NOT per-chat persisted: the resume carries the live default selection.
+    // No per-chat binding: the resume carries the live default selection.
     expect(resume.mock.calls[0][0].agentOptions).toEqual({ provider: 'deepseek', model: 'deepseek-chat' })
     // Preset IS backfilled from the session's own durable record, over the config.
     expect(sessionPersistence.open).toHaveBeenCalledTimes(1)
@@ -1029,5 +1029,69 @@ describe('ChatRegistry', () => {
     follow.client.close()
     await follow.bridge.stop()
     await follow.connection.stop()
+  }, 30_000)
+
+  it('配置 modelPrivate/modelGroup 覆盖部署默认，类型档位叠加生效', async () => {
+    const h = await makeHarness({
+      defaultModel: () => ({ provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' }),
+      thinkingPrivate: 'low',
+      modelPrivate: { provider: 'openai', model: 'gpt-5' },
+    })
+    h.sendText('你好')
+    await vi.waitFor(() => expect(h.sessionIds).toHaveLength(1))
+    expect(h.captured.createdAgentOptions?.[0]).toEqual({ provider: 'openai', model: 'gpt-5', reasoningEffort: 'low' })
+    h.client.close()
+    await h.bridge.stop()
+    await h.connection.stop()
+  }, 30_000)
+
+  it('modelPrivate 与 modelGroup 分别作用于私聊与群聊', async () => {
+    const h = await makeHarness({
+      defaultModel: () => ({ provider: 'deepseek', model: 'deepseek-chat' }),
+      modelPrivate: { provider: 'anthropic', model: 'claude-4' },
+      modelGroup: { provider: 'openai', model: 'gpt-5' },
+      thinkingGroup: 'max',
+    })
+    h.sendText('你好')
+    await vi.waitFor(() => expect(h.sessionIds).toHaveLength(1))
+    expect(h.captured.createdAgentOptions?.[0]).toEqual({ provider: 'anthropic', model: 'claude-4' })
+
+    await h.bridge.handleInbound({
+      post_type: 'message', message_type: 'group', group_id: 20001,
+      user_id: 10001, self_id: 10002,
+      message: [{ type: 'at', data: { qq: '10002' } }, { type: 'text', data: { text: 'hi' } }],
+      sender: { user_id: 10001, nickname: '小明' },
+    } as never)
+    await vi.waitFor(() => expect(h.sessionIds).toHaveLength(2))
+    expect(h.captured.createdAgentOptions?.[1]).toEqual({ provider: 'openai', model: 'gpt-5', reasoningEffort: 'max' })
+    h.client.close()
+    await h.bridge.stop()
+    await h.connection.stop()
+  }, 30_000)
+
+  it('重启恢复时按配置 modelPrivate/thinkingPrivate 接线，覆盖会话自身记录的选择', async () => {
+    const mediaDir = mkdtempSync(join(tmpdir(), 'onebot-test-'))
+    const deployment = () => ({ provider: 'deepseek', model: 'deepseek-chat', reasoningEffort: 'high' })
+    const modelPrivate = { provider: 'openai', model: 'gpt-5' }
+    const thinkingPrivate = 'max'
+    const first = await makeHarness({ mediaDir, defaultModel: deployment, modelPrivate, thinkingPrivate })
+    first.sendText('你好')
+    await vi.waitFor(() => expect(first.sessionIds).toHaveLength(1))
+    const sessionId = first.sessionIds[0]
+    first.client.close()
+    await first.bridge.stop()
+    await first.connection.stop()
+
+    const again = await makeHarness({ mediaDir, resumeOk: true, defaultModel: deployment, modelPrivate, thinkingPrivate })
+    again.sendText('在吗')
+    await vi.waitFor(() => expect(again.sessionIds).toHaveLength(1))
+    expect(again.sessionIds[0]).toBe(sessionId)
+    expect(again.captured.resumedAgentOptions[0]).toEqual({ provider: 'openai', model: 'gpt-5', reasoningEffort: 'max' })
+    // 恢复后在线选择也是配置值（宿主的会话记录不覆盖它）。
+    const resumed = registryOf(again).chats.get('private:10001')!
+    expect(resumed.agent.model.current()).toMatchObject({ provider: 'openai', model: 'gpt-5', reasoningEffort: 'max' })
+    again.client.close()
+    await again.bridge.stop()
+    await again.connection.stop()
   }, 30_000)
 })

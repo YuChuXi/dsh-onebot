@@ -32,6 +32,14 @@ description: NapCat（OneBot 11）白名单接口的参数与返回、消息段�
 - 循环任务在停机恢复后只补发最近一次漏掉的触发；本地时刻不存在（夏令时跳变）时跳过，重复时刻取较早的一次。
 - `qq_list_schedules` / `qq_delete_schedule` / `qq_update_schedule` 只作用于 `chat_id` 指定的会话；`update` 不能改 `after_seconds`，新的相对延时需要新建。
 
+## 模型与思考强度
+
+`qq_model` 查看/切换模型与思考强度：`action=get` 报当前生效的 provider/model/level，并给出设置页为该群/私聊类型指定的值（`modelPrivate` / `modelGroup` + `thinkingPrivate` / `thinkingGroup`）；`action=set` 切换当前会话（`scope=chat`，只影响本会话）或部署默认（`scope=default`，仅管理员回合）。
+
+群/私聊类型的长期模型在设置页「私聊」「群聊」两块分别用下拉配置（`modelPrivate` / `modelGroup`），思考强度同样用下拉（`thinkingPrivate` / `thinkingGroup`）；留空 = 跟随部署默认。该配置在新会话创建时生效，改模型或思考强度优先改这里。
+
+档位不是固定四档：以下拉列出的、目标 provider/model 支持的能力为准（设置页按宿主模型能力生成选项，切换模型即重算）。要确认某路由支持什么，先 `qq_model action=get` 看 `levels`。
+
 ## 历史返回
 
 `qq_group_history` 返回 `{messages, next_seq}`。每条消息含 `message_id`、`time`、`user_id`、`nickname`、`text`；`text` 已解析为纯文本，不含段数组，需要段结构时用 `get_forward_msg`。

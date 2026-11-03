@@ -15,7 +15,7 @@ import type { Agent, AgentRegistry, ModelSelection } from '@deepseek-ai/dsh-agen
 import type { SessionId, SessionStore } from '@deepseek-ai/dsh-session';
 import type { Context } from '@deepseek-ai/cordis';
 import type { ChatId, UserRole } from '../chat/index.js';
-import type { AgentPresetsLike, BridgeConfig, SessionPersistenceLike, SessionTitlePort, WorkspaceRegistryLike } from '../bridge/config.js';
+import type { AgentPresetsLike, BridgeConfig, ChatModelBinding, SessionPersistenceLike, SessionTitlePort, WorkspaceRegistryLike } from '../bridge/config.js';
 /** `/session` 列表的一项：一个历史完好、可切回的退役会话。 */
 export interface SwitchableSession {
     id: string;
@@ -137,7 +137,7 @@ export interface RegistryDeps {
     agentPresets: AgentPresetsLike | undefined;
     defaultModel: (() => ModelSelection | undefined) | undefined;
     /** The only config fields the registry reads. */
-    config: Pick<BridgeConfig, 'mediaDir' | 'workspacePath' | 'agentPreset' | 'restrictedMemberPrefix' | 'maxImageBytes' | 'maxVoiceBytes' | 'maxFileBytes' | 'chatIdleEvictDays' | 'thinkingPrivate' | 'thinkingGroup'>;
+    config: Pick<BridgeConfig, 'mediaDir' | 'workspacePath' | 'agentPreset' | 'restrictedMemberPrefix' | 'maxImageBytes' | 'maxVoiceBytes' | 'maxFileBytes' | 'chatIdleEvictDays' | 'thinkingPrivate' | 'thinkingGroup' | 'modelPrivate' | 'modelGroup'>;
     log(level: 'info' | 'warn' | 'error' | 'debug', message: string): void;
     /** Bridge stop flag (guards the resume loop). */
     isStopping(): boolean;
@@ -209,12 +209,27 @@ export declare class ChatRegistry {
     /** 一个会话重新成为当前绑定时，从退役历史里移除。 */
     private unretire;
     /**
-     * 新建 / 恢复会话的初始模型选项：部署默认提供 provider / model 与思考强度，
-     * 再按会话类型用 thinkingPrivate / thinkingGroup 覆盖；default 表示沿用部署
-     * 默认档位。恢复会话时，宿主的持久化选择优先于这些初始选项。
+     * 配置里为该会话类型指定的模型与思考强度：`modelGroup`/`modelPrivate` 提供
+     * 路由，`thinkingGroup`/`thinkingPrivate` 提供档位；两者各自可缺省。
      *
      * Args:
-     *   chatId (ChatId): 目标会话；决定取群聊还是私聊的思考强度。
+     *   chatId (ChatId): 目标会话；只区分群聊与私聊。
+     *
+     * Returns:
+     *   ChatModelBinding | undefined: 两者都未配置时 undefined。
+     *
+     * Callers:
+     *   - `modelWiring`（新建/恢复会话的初始选项）。
+     *   - `applyConfiguredModel`（恢复后重新声明）。
+     *   - `bridge/index.ts:configuredModel`（qq_model 的 get）。
+     */
+    configuredModel(chatId: ChatId): ChatModelBinding | undefined;
+    /**
+     * 新建会话的初始模型选项：部署默认提供 provider / model 与思考强度，
+     * 再被该会话类型的配置覆盖（路由与档位各自独立覆盖）。
+     *
+     * Args:
+     *   chatId (ChatId): 目标会话；决定取群聊还是私聊的配置。
      *
      * Returns:
      *   AgentOptions: 传给 agents.create / agents.resume 的模型选项。
@@ -224,6 +239,21 @@ export declare class ChatRegistry {
      *   - `resumeChat`。
      */
     private modelWiring;
+    /**
+     * 恢复的会话带着自己的历史选择，宿主的记录优先于创建选项；该会话类型
+     * 配置了模型路由时，在恢复后重新声明，保证配置权威（只配思考强度时
+     * 不改写已有会话的选择）。
+     *
+     * Args:
+     *   chatId (ChatId): 目标会话；没有配置指定路由时什么都不做。
+     *
+     * Returns:
+     *   void: 无。
+     *
+     * Callers:
+     *   - `resumeChat`（恢复完成后）。
+     */
+    private applyConfiguredModel;
     /** C2: the AgentSetup closure shared by the create and resume assembly
      * paths. The only difference between the callers is the preset: a resumed
      * session rejoins the preset it recorded itself; a fresh create reuses the

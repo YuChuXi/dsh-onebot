@@ -5,15 +5,16 @@
  * window.__ModuleLoader__）的模块级契约：
  *   ① 语法可解析（new Function）+ CJS banner/footer 形态 + externals 仅 react；
  *   ② 入口导出 inject + apply；
- *   ③ 四组 33 键：分组/键集/默认值与宿主侧 src/settings-remote.ts 导出常量逐字一致（descriptor 契约核对，防两侧漂移）；
+ *   ③ 六组 37 键：分组/键集/默认值与宿主侧 src/settings-remote.ts 导出常量逐字一致（descriptor 契约核对，防两侧漂移）；
  *      诊断组 5 键文案为中文标签 + 一句话「关掉会怎样」+ 配置键名（W6）；
  *   ④ Typert descriptor 与 T3 服务方法面逐字对齐：getSettings() /
- *      updateSettings(patch, expectedRevision) / listWorkspaces()（W7），全
+ *      updateSettings(patch, expectedRevision) / getModelEfforts(provider, model) /
+ *      listWorkspaces()（W7），全
  *      positional，namespace onebotSettings，result codec 可解析 host 形态快照
  *      （含脱敏 accessToken）与 workspace 列表；
- *   ⑤ 渲染函数模块级可测：renderGroup 纯函数产出四组 33 键控件，accessToken
+ *   ⑤ 渲染函数模块级可测：renderGroup 纯函数产出六组 37 键控件，accessToken
  *      密码型输入且不明文回显（脱敏约定：host 快照 accessToken 恒 ''）；
- *   ⑥ 保存语义：computePatch 产出 33 键子集 patch；secretDraft '' = 不修改、
+ *   ⑥ 保存语义：computePatch 产出 37 键子集 patch；secretDraft '' = 不修改、
  *      clearSecret = accessToken ''（清空）；数字非法键不进 patch。
  *
  * 契约唯一来源：docs/settings-page-design.md（T1 定案）§3/§3.1/§4/§5。
@@ -114,13 +115,17 @@ describe('T4 客户端 bundle — descriptor 契约核对（与 T3 src/settings-
     }
   })
 
-  it('方法集逐字对齐：getSettings() 0 参；updateSettings(patch, expectedRevision)；listWorkspaces() 0 参（W7），全 positional', () => {
-    expect(descriptors.map((descriptor) => descriptor.method)).toEqual(['getSettings', 'updateSettings', 'listWorkspaces'])
+  it('方法集逐字对齐：getSettings() 0 参；updateSettings(patch, expectedRevision)；getModelEfforts(provider, model)；listWorkspaces() 0 参（W7），全 positional', () => {
+    expect(descriptors.map((descriptor) => descriptor.method)).toEqual(['getSettings', 'updateSettings', 'getModelEfforts', 'listWorkspaces'])
     const getSettings = descriptors[0] as { parameters: Array<unknown>; result: { schema: { parse(value: unknown): unknown } } }
     expect(getSettings.parameters).toEqual([])
     const updateSettings = descriptors[1] as { parameters: Array<{ name: string }>; result: { schema: { parse(value: unknown): unknown } } }
     expect(updateSettings.parameters.map((parameter) => parameter.name)).toEqual(['patch', 'expectedRevision'])
-    const listWorkspaces = descriptors[2] as { parameters: Array<unknown>; result: { typeSymbol: string; schema: { parse(value: unknown): unknown } } }
+    const getModelEfforts = descriptors[2] as { parameters: Array<{ name: string }>; result: { typeSymbol: string; schema: { parse(value: unknown): unknown } } }
+    expect(getModelEfforts.parameters.map((parameter) => parameter.name)).toEqual(['provider', 'model'])
+    expect(getModelEfforts.result.typeSymbol).toBe('ModelEfforts')
+    expect(getModelEfforts.result.schema.parse({ efforts: ['low', 'high'] })).toEqual({ efforts: ['low', 'high'] })
+    const listWorkspaces = descriptors[3] as { parameters: Array<unknown>; result: { typeSymbol: string; schema: { parse(value: unknown): unknown } } }
     expect(listWorkspaces.parameters).toEqual([])
     expect(listWorkspaces.result.typeSymbol).toBe('WorkspaceListResult')
     // W7：listWorkspaces result codec 可解析 host 形态（available + workspaces 摘要）。
@@ -132,7 +137,7 @@ describe('T4 客户端 bundle — descriptor 契约核对（与 T3 src/settings-
     expect(listWorkspaces.result.schema.parse({ available: false, workspaces: [] })).toEqual({ available: false, workspaces: [] })
   })
 
-  it('result codec 可解析宿主形态快照（T1 §3：33 键 config + secrets 脱敏标记 + groups + effect=restart）', () => {
+  it('result codec 可解析宿主形态快照（T1 §3：37 键 config + choices/catalog + secrets 脱敏标记 + groups + effect=restart）', () => {
     const getSettings = descriptors[0] as { result: { schema: { parse(value: unknown): unknown } } }
     const config: Record<string, unknown> = { ...SCHEMA_DEFAULTS }
     config.accessToken = '' // 宿主 buildSnapshot 脱敏约定：快照 accessToken 恒 ''
@@ -140,6 +145,8 @@ describe('T4 客户端 bundle — descriptor 契约核对（与 T3 src/settings-
       revision: 3,
       entryActive: true,
       config,
+      choices: { thinkingPrivate: ['default', 'low', 'high'] },
+      catalog: { providers: [{ id: 'deepseek', name: 'DeepSeek' }], models: { deepseek: [{ id: 'deepseek-chat', name: 'DeepSeek Chat' }] } },
       secrets: SECRET_KEYS.map((key) => ({ path: [key], set: typeof SCHEMA_DEFAULTS[key] === 'string' && (SCHEMA_DEFAULTS[key] as string).length > 0 })),
       groups: SETTINGS_GROUPS,
       effect: REMOTE_EFFECT,
@@ -147,6 +154,9 @@ describe('T4 客户端 bundle — descriptor 契约核对（与 T3 src/settings-
     const parsed = getSettings.result.schema.parse(snapshot) as typeof snapshot
     expect(parsed.config.accessToken).toBe('')
     expect(parsed.config.workspacePath).toBe('') // 含 workspacePath，默认 ''
+    expect(parsed.config.modelPrivate).toBe('') // 含私聊/群聊模型路由
+    expect(parsed.choices).toEqual({ thinkingPrivate: ['default', 'low', 'high'] })
+    expect(parsed.catalog?.providers).toEqual([{ id: 'deepseek', name: 'DeepSeek' }])
     expect(parsed.effect).toBe(REMOTE_EFFECT)
   })
 
@@ -158,22 +168,23 @@ describe('T4 客户端 bundle — descriptor 契约核对（与 T3 src/settings-
     expect(() => getSettings.result.schema.parse({ revision: 0, entryActive: true, config: SCHEMA_DEFAULTS, secrets: [], groups: SETTINGS_GROUPS, effect: 'none' })).toThrow()
   })
 
-  it('updateSettings patch codec 接受 33 键任意子集、拒绝非法枚举值', () => {
+  it('updateSettings patch codec 接受 37 键任意子集、拒绝非法枚举值', () => {
     const updateSettings = descriptors[1] as { parameters: Array<{ codec: { schema: { parse(value: unknown): unknown } } }> }
     const patchCodec = updateSettings.parameters[0].codec.schema
     expect(patchCodec.parse({ port: 1234 })).toEqual({ port: 1234 })
     expect(patchCodec.parse({ adminUsers: ['10000'], recordInbound: true })).toEqual({ adminUsers: ['10000'], recordInbound: true })
     expect(patchCodec.parse({ workspacePath: '/tmp/ws' })).toEqual({ workspacePath: '/tmp/ws' }) // W7：字符串通道
+    expect(patchCodec.parse({ modelPrivate: 'deepseek/deepseek-chat' })).toEqual({ modelPrivate: 'deepseek/deepseek-chat' })
     expect(() => patchCodec.parse({ mode: 'invalid' })).toThrow()
   })
 })
 
-describe('T4 客户端 bundle — 四组 33 键（分组/键集/默认值 = T1 §4 表 + W6 诊断组 + W7 workspacePath + 插话四开关 + 出站节流三键 = T3 常量）', () => {
+describe('T4 客户端 bundle — 六组 37 键（分组/键集/默认值 = T1 §4 表 + W6 诊断组 + W7 workspacePath + 私聊/群聊两块 = T3 常量）', () => {
   it('分组与键序逐字对齐 host SETTINGS_GROUPS', () => {
     expect(client.GROUP_KEYS).toEqual(SETTINGS_GROUPS)
-    expect(groups.map((group) => group.id)).toEqual(['connection', 'permissions', 'behavior', 'diagnostics'])
+    expect(groups.map((group) => group.id)).toEqual(['connection', 'permissions', 'private', 'group', 'behavior', 'diagnostics'])
     expect(allFields.map((field) => field.key).sort()).toEqual([...ALL_KEYS].sort())
-    expect(allFields).toHaveLength(33)
+    expect(allFields).toHaveLength(37)
   })
 
   it('默认值逐字对齐 host SCHEMA_DEFAULTS（重置按钮唯一来源）', () => {
@@ -189,6 +200,7 @@ describe('T4 客户端 bundle — 四组 33 键（分组/键集/默认值 = T1 �
       else if (field.type === 'enum') expect(field.options ?? []).toContain(fallback)
       else if (field.type === 'stringArray') expect(Array.isArray(fallback)).toBe(true)
       else if (field.type === 'text') expect(typeof fallback).toBe('string')
+      else if (field.type === 'model') expect(typeof fallback).toBe('string')
       else expect(field.type === 'string' || field.type === 'secret').toBe(true)
     }
     // 枚举键集与宿主 validatePatch 接受的枚举值一致（T1 §4 表）
@@ -205,7 +217,7 @@ describe('T4 客户端 bundle — 四组 33 键（分组/键集/默认值 = T1 �
   })
 
   it('分组标题与字段 label 为中文（T4 要求）', () => {
-    expect(groups.map((group) => group.title)).toEqual(['连接', '权限', '行为', '诊断'])
+    expect(groups.map((group) => group.title)).toEqual(['连接', '权限', '私聊', '群聊', '行为', '诊断'])
     for (const field of allFields) expect(field.label).toMatch(/\p{Script=Han}/u)
   })
 
@@ -218,9 +230,10 @@ describe('T4 客户端 bundle — 四组 33 键（分组/键集/默认值 = T1 �
 describe('T4 客户端 bundle — 渲染函数模块级可测（renderGroup 纯函数）', () => {
   const draft = client.draftFromSnapshot as (snapshot: { config: Record<string, unknown> }) => Record<string, unknown>
 
-  function renderAll(draftValues: Record<string, unknown>, opts: { secretSet?: boolean; clearSecret?: boolean } = {}) {
+  function renderAll(draftValues: Record<string, unknown>, opts: { secretSet?: boolean; clearSecret?: boolean; choices?: Record<string, string[]> } = {}) {
     return groups.map((group) => (client.renderGroup as Function)(stubReact, group, {
       draft: draftValues,
+      choices: opts.choices ?? {},
       secretSet: opts.secretSet === true,
       clearSecret: opts.clearSecret === true,
       onChange: () => {},
@@ -229,22 +242,68 @@ describe('T4 客户端 bundle — 渲染函数模块级可测（renderGroup 纯�
     }))
   }
 
-  it('四组各产出标题与逐字段控件行（33 行 obx-field）', () => {
+  it('六组各产出标题与逐字段控件行（37 行 obx-field）', () => {
     const sections = renderAll(draft({ config: SCHEMA_DEFAULTS }))
-    expect(sections.map((section) => (section.props as Record<string, unknown>)['data-group'])).toEqual(['connection', 'permissions', 'behavior', 'diagnostics'])
+    expect(sections.map((section) => (section.props as Record<string, unknown>)['data-group'])).toEqual(['connection', 'permissions', 'private', 'group', 'behavior', 'diagnostics'])
     const titles = sections.map((section) => ((section.children[0] as StubElement).children[0] as string))
-    expect(titles).toEqual(['连接', '权限', '行为', '诊断'])
+    expect(titles).toEqual(['连接', '权限', '私聊', '群聊', '行为', '诊断'])
     const fieldRows = sections.flatMap((section) => walk(section).filter((element) => element.type === 'div' && element.props.className === 'obx-field'))
-    expect(fieldRows).toHaveLength(33)
+    expect(fieldRows).toHaveLength(37)
   })
 
-  it('控件类型齐备：4 枚举下拉 + 5 多行文本 + 13 布尔勾选 + 11 文本框 + 1 密码框（secret 另含清除勾选）', () => {
+  it('动态 choices 收窄枚举选项，并保留已存的旧值', () => {
+    const sections = renderAll(draft({ config: { ...SCHEMA_DEFAULTS, thinkingPrivate: 'off' } }), {
+      choices: { thinkingPrivate: ['default', 'low', 'high'] },
+    })
+    const privateSection = sections.find((section) => section.props['data-group'] === 'private')!
+    const target = walk(privateSection).filter((element) => element.type === 'select' && element.props['aria-label'] === '思考强度') as StubElement[]
+    expect(target).toHaveLength(1)
+    expect((target[0].children as StubElement[]).map((option) => option.props.value)).toEqual(['default', 'low', 'high', 'off'])
+    // 未给动态选项的群聊档位仍用静态枚举。
+    const groupSection = sections.find((section) => section.props['data-group'] === 'group')!
+    const fallback = walk(groupSection).filter((element) => element.type === 'select' && element.props['aria-label'] === '思考强度') as StubElement[]
+    expect((fallback[0].children as StubElement[]).map((option) => option.props.value)).toEqual(['default', 'off', 'low', 'high', 'max'])
+  })
+
+  it('模型控件：provider + model 两个级联下拉，变更产出 provider/model 串', () => {
+    const changes: Array<{ key: string; value: unknown }> = []
+    const privateGroup = groups.find((group) => group.id === 'private')!
+    const section = (client.renderGroup as Function)(stubReact, privateGroup, {
+      draft: draft({ config: { ...SCHEMA_DEFAULTS, modelPrivate: 'opencode-go/deepseek-v4.1-flash' } }),
+      catalog: {
+        providers: [{ id: 'opencode-go', name: 'OpenCode Go' }, { id: 'deepseek', name: 'DeepSeek' }],
+        models: {
+          'opencode-go': [{ id: 'deepseek-v4.1-flash', name: 'Flash' }],
+          deepseek: [{ id: 'deepseek-chat', name: 'Chat' }, { id: 'deepseek-reasoner', name: 'Reasoner' }],
+        },
+      },
+      onChange: (field: { key: string }, value: unknown) => { changes.push({ key: field.key, value }) },
+      onSecretChange: () => {},
+      onClearSecretChange: () => {},
+    })
+    const selects = walk(section).filter((element) => element.type === 'select' && String(element.props['aria-label']).startsWith('模型')) as StubElement[]
+    expect(selects).toHaveLength(2)
+    expect(selects[0].props['aria-label']).toBe('模型（提供商）')
+    expect((selects[0].children as StubElement[]).map((option) => option.props.value)).toEqual(['', 'opencode-go', 'deepseek'])
+    expect((selects[1].children as StubElement[]).map((option) => option.props.value)).toEqual(['', 'deepseek-v4.1-flash'])
+    // 切换 provider → 自动选中该 provider 的第一个模型。
+    ;(selects[0].props.onChange as (event: { target: { value: string } }) => void)({ target: { value: 'deepseek' } })
+    expect(changes).toEqual([{ key: 'modelPrivate', value: 'deepseek/deepseek-chat' }])
+    // 切换模型 → 保持当前 provider。
+    ;(selects[1].props.onChange as (event: { target: { value: string } }) => void)({ target: { value: 'deepseek-reasoner' } })
+    expect(changes[1]).toEqual({ key: 'modelPrivate', value: 'opencode-go/deepseek-reasoner' })
+    // 提供商留空 = 跟随部署默认。
+    ;(selects[0].props.onChange as (event: { target: { value: string } }) => void)({ target: { value: '' } })
+    expect(changes[2]).toEqual({ key: 'modelPrivate', value: '' })
+  })
+
+  it('控件类型齐备：6 枚举下拉 + 4 模型下拉 + 5 多行文本 + 13 布尔勾选 + 11 文本框 + 1 密码框（secret 另含清除勾选）', () => {
     const elements = renderAll(draft({ config: SCHEMA_DEFAULTS })).flatMap((section) => walk(section))
     const inputs = elements.filter((element) => element.type === 'input') as Array<StubElement & { props: Record<string, unknown> }>
     const selects = elements.filter((element) => element.type === 'select')
     const textareas = elements.filter((element) => element.type === 'textarea')
-    expect(selects).toHaveLength(4) // mode/dmPolicy/groupPolicy/sleepMode
-    expect(textareas).toHaveLength(5)
+    expect(selects).toHaveLength(10) // mode/dmPolicy/groupPolicy/sleepMode/thinkingPrivate/thinkingGroup + 两组模型各 2
+    expect(textareas).toHaveLength(5) // 3 字符串数组 + 2 附加提示词
     expect(inputs.filter((input) => input.props.type === 'checkbox')).toHaveLength(12 + 1) // 12 布尔（requireMention/allowAllUsers/sendErrorNotice + 4 插话开关 + 5 诊断）+ secret 清除勾选
     expect(inputs.filter((input) => input.props.type === 'text')).toHaveLength(11) // host/url/botQQ/workspacePath/sleepStart/sleepEnd + port/三档出站间隔/recentMessages（number 以文本框渲染）
     expect(inputs.filter((input) => input.props.type === 'password')).toHaveLength(1)
@@ -279,7 +338,7 @@ describe('T4 客户端 bundle — 保存语义（updateSettings(patch, expectedR
     opts?: { secretDraft?: string; clearSecret?: boolean },
   ) => { patch: Record<string, unknown>; invalidKeys: string[] }
 
-  it('仅下发与生效值有差异的键（33 键任意子集）', () => {
+  it('仅下发与生效值有差异的键（37 键任意子集）', () => {
     const values = draft({ config: SCHEMA_DEFAULTS })
     values.port = '9999'
     values.mode = 'forward'
@@ -428,7 +487,7 @@ describe('W6 失败守卫（客户端侧）— host edit-failed 中文错误可�
     expect(isConflictError({ code: 'onebot-settings/conflict', message: 'expectedRevision mismatch' })).toBe(true)
   })
 
-  it('host patch 白名单 33 键与 client patchSchema 同宽：新键可下发（契约同步核对）', () => {
+  it('host patch 白名单 37 键与 client patchSchema 同宽：新键可下发（契约同步核对）', () => {
     const updateSettings = descriptors[1] as { parameters: Array<{ codec: { schema: { parse(value: unknown): unknown } } }> }
     const patch = updateSettings.parameters[0].codec.schema.parse({
       traceEnabled: false, recordInbound: true, inboxRedact: false, injectEnabled: false, injectDryRun: true,

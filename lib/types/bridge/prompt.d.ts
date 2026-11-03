@@ -10,8 +10,8 @@
 import type { ChatId } from '../chat/index.js';
 /**
  * 构建 dsh-onebot 通道的提示词。
- * 思考档位不进提示词：它是请求参数（请求里由 installModelSelection 写入），
- * 模型要读当前值就调 qq_thinking(action=get)，不必为一行仪表盘牺牲前缀缓存。
+ * 模型与思考档位不进提示词：它们是请求参数（请求里由 installModelSelection 写入），
+ * 模型要读当前值就调 qq_model(action=get)，不必为一行仪表盘牺牲前缀缓存。
  *
  * Args:
  *   chatId (ChatId): 会话 id；决定提示词里的群号 / 对方 QQ。

@@ -29,8 +29,8 @@ User(QQ) ←→ NapCat ←→ dsh-onebot plugin ←→ dsh Agent (one per chat)
 | Inbound | Private/group chats; the payload is a **JSON array of records** (ascending time, last record = the current message, the rest = the group window before it; a record carries qq/nickname/id/time/message, plus role for owner/admins); the group window is cut from `get_group_msg_history` by a persisted `{time,id}` watermark, marks "更早的消息已省略" when the anchor slid out of history, and never injects an already-injected message twice; segment arrays only (no CQ-string layer); @/reply trigger detection (fail-closed: replies count only when replying to the bot itself, verified through `get_msg` and reused for quote expansion); media segments are backfilled with local paths (images from 4 sources url/base64/file/hash with auto-shrink at `inboundImageMaxPx`, GIFs untouched; files via the dual channel `get_private_file_url` + `get_file` base64/url fallback) and become an explicit "not fetched" note when the bytes cannot be had; quotes and merged forwards expand in place into a quoted record and node records; face segments carry their Chinese name; a poke wakes the bot and pokes between other members join the window |
 | Voice | ffmpeg to 16 kHz WAV + whisper transcription (openai-whisper / whisper.cpp / custom command); **non-blocking**: the voice message enters the turn as a `record` segment with a local path right away, and the transcript follows as a `（语音转写：…）` supplement when done (default timeout 60s); failure, timeout or an empty transcript keeps the `record` segment as the final state |
 | Outbound | **The model's `qq_send_*` tool calls are the only way to speak**: the turn's assistant text is never auto-sent (no tool call = no message); merged forwards via `qq_send_forward` (group/private); per-character pacing (base 300ms + 60ms/char + ±30% jitter, see the three config keys below); typing indicator (`set_input_status`, private chats only) |
-| Commands | Slash commands (admin only): `/new` fresh session, `/session` list switchable historical sessions and switch back by number, `/model` view/switch the current session's model (`--default` changes the deployment default; the bare form renders a two-level numbered list), `/compact` forwards the host's context-compaction command; every other slash text goes to the model |
-| Tools | `qq_send_message` (the general outlet: text/image/voice/video/file segments), `qq_send_text`, `qq_send_image` (≤9 images, path or URL), `qq_send_voice`, `qq_send_video`, `qq_send_file`, `qq_send_forward`, `qq_send_poke` (poke a user), `qq_list_stickers` (list collected stickers), `qq_send_sticker` (send a collected / image / market sticker), `qq_collect_sticker` (collect a sticker), `qq_napcat_api` (22 allowlisted actions), `qq_end_turn` (end the turn), `qq_create_schedule` / `qq_list_schedules` / `qq_delete_schedule` / `qq_update_schedule` (group/DM schedules with the same rules as dsh `schedule_*`: delay, absolute time, interval, daily, weekly, cron), `qq_group_history`, `qq_thinking` (inspect/switch the chat-level or deployment-default thinking level); guarded file editing `code_safe_edit`/`code_safe_rollback`/`code_list_backups` moved to the standalone plugin **dsh-safe-edit** — see Safe editing below |
+| Commands | Slash commands (admin only): `/new` fresh session, `/session` list switchable historical sessions and switch back by number, `/model` view/switch the current session's model (`--default` changes the deployment default; the bare form renders a two-level numbered list); long-lived per-chat-type models live in the settings page "Private chats"/"Group chats" blocks as dropdowns (`modelPrivate` / `modelGroup`); `/compact` forwards the host's context-compaction command; every other slash text goes to the model |
+| Tools | `qq_send_message` (the general outlet: text/image/voice/video/file segments), `qq_send_text`, `qq_send_image` (≤9 images, path or URL), `qq_send_voice`, `qq_send_video`, `qq_send_file`, `qq_send_forward`, `qq_send_poke` (poke a user), `qq_list_stickers` (list collected stickers), `qq_send_sticker` (send a collected / image / market sticker), `qq_collect_sticker` (collect a sticker), `qq_napcat_api` (22 allowlisted actions), `qq_end_turn` (end the turn), `qq_create_schedule` / `qq_list_schedules` / `qq_delete_schedule` / `qq_update_schedule` (group/DM schedules with the same rules as dsh `schedule_*`: delay, absolute time, interval, daily, weekly, cron), `qq_group_history`, `qq_model` (inspect the effective model and the configured designation; switch the current session's or the deployment-default model/thinking level); guarded file editing `code_safe_edit`/`code_safe_rollback`/`code_list_backups` moved to the standalone plugin **dsh-safe-edit** — see Safe editing below |
 | Permissions | Admin allowlist (`ONEBOT_ALLOWED_USERS`), dm/group policies (open/allowlist/disabled), group @-mention gating, restricted users soft limit (`[受限用户:仅问答]`) |
 | Sessions | One persistent Agent per QQ chat (stable derived session id), auto-resumed after restart; mounted into presets/workspaces via `agentPreset`/`workspacePath`; mapping flushed to disk at the end of every turn |
 | Ops | Hot reload: **config overrides** and **insert additions/removals** in the profile-level patch take effect hot — the plugin fiber restarts in place within seconds (the host process is not restarted; cost: one second-level QQ bridge reconnect, in-flight turns interrupted); touch / no-content-change triggers nothing; changes to the bundle's built-in patch, repo templates, deployment-copy patch files, or the root `cordis.yml` do **not** hot-reload; temp media TTL cleanup |
@@ -184,8 +184,10 @@ default). Common options:
 | `steerAllMembers` | `false` | steer eligibility (active while the steer switch is on): on = every member may steer; off (default) = admins only. Messages from senders without eligibility take the queue path (enqueue + queue notice). Editable in the settings page behavior group; applies after a hot restart |
 | `steerAllowRestricted` | `true` | restricted-member steer (active while the steer switch is on): on (default) = group members under the soft limit (non-admin with `restrictedMemberPrefix` on) may also steer; off = restricted members always take the queue path. Editable in the settings page behavior group; applies after a hot restart |
 | `steerNotice` | `true` | steer notice: reply「已作为补充指令提交给当前任务」when a message is steered in; off = silent steer. Editable in the settings page behavior group; applies after a hot restart |
-| `thinkingPrivate` | `default` | thinking effort for new private-chat sessions: `off`/`low`/`high`/`max`; `default` follows the deployment default. Existing sessions keep their own selection |
-| `thinkingGroup` | `default` | thinking effort for new group-chat sessions; same values and rules as `thinkingPrivate` |
+| `thinkingPrivate` | `default` | thinking effort for new private-chat sessions; `default` follows the deployment default. A dropdown in the settings page; its options come from the selected private-chat model's capabilities and refresh when the model changes |
+| `thinkingGroup` | `default` | thinking effort for new group-chat sessions; same rules as `thinkingPrivate` |
+| `modelPrivate` | `''` | model for private chats, `<provider>/<model>`; empty = deployment default. Chosen with a two-level provider → model dropdown in the settings page "Private chats" block |
+| `modelGroup` | `''` | model for group chats, `<provider>/<model>`; empty = deployment default. Same rules as `modelPrivate` |
 | `dmPolicy` | `open` | DM policy: `open`(admins only)/`allowlist`/`disabled` |
 | `groupPolicy` | `open` | group policy: `open`(everyone)/`allowlist`/`disabled` |
 | `restrictedMemberPrefix` | `true` | Prefix non-admin group messages with `[受限用户:仅问答]` (soft restriction) |
@@ -237,13 +239,19 @@ The dsh Web GUI settings page exposes this plugin's configuration visually (a ho
 `onebotSettings` that writes the config override of the `dsh-onebot` entry in the profile-level
 `cordis.patch.yml` — the same persistence layer as a hand-edited patch and the host's native settings page).
 
-### Four groups, 35 keys
+### Six groups, 37 keys
+
+The page splits into "Private chats" and "Group chats" blocks, each holding that chat type's model,
+thinking effort, and extra prompt. Every option is a dropdown (the model is a two-level provider → model
+dropdown; the thinking-effort list is recomputed from the selected model's capabilities).
 
 | Group | Keys |
 |---|---|
 | connection | `mode`, `host`, `port`, `url`, `accessToken`, `botQQ`, `workspacePath` |
 | permissions | `requireMention`, `adminUsers`, `dmPolicy`, `groupPolicy`, `allowAllUsers`, `allowFrom`, `groupAllowFrom` |
-| behavior | `sendErrorNotice`, `outboundIntervalBaseMs`, `outboundIntervalPerCharMs`, `outboundIntervalJitterPct`, `recentMessages`, `steerEnabled`, `steerAllMembers`, `steerAllowRestricted`, `steerNotice`, `sleepMode`, `sleepStart`, `sleepEnd`, `extraPromptPrivate`, `extraPromptGroup`, `thinkingPrivate`, `thinkingGroup` |
+| private | `modelPrivate`, `thinkingPrivate`, `extraPromptPrivate` |
+| group | `modelGroup`, `thinkingGroup`, `extraPromptGroup` |
+| behavior | `sendErrorNotice`, `outboundIntervalBaseMs`, `outboundIntervalPerCharMs`, `outboundIntervalJitterPct`, `recentMessages`, `steerEnabled`, `steerAllMembers`, `steerAllowRestricted`, `steerNotice`, `sleepMode`, `sleepStart`, `sleepEnd` |
 | diagnostics | `traceEnabled`, `recordInbound`, `inboxRedact`, `injectEnabled`, `injectDryRun` |
 
 `accessToken` is a password-style input in the settings page; snapshots redact it on return (no plaintext echo);
@@ -253,7 +261,7 @@ the write side still lands in the patch file as plaintext.
 
 **schema defaults ← bundle/base patch (inherited layer) ← profile override line (what the settings page writes)**;
 within the same layer, later patch entries win. Settings-page keys and a hand-edited patch are the same line in
-the same layer — there are no two competing priorities. Keys outside the 35 (media/STT/performance/
+the same layer — there are no two competing priorities. Keys outside the 37 (media/STT/performance/
 `agentPreset` and other low-frequency keys) get no UI; hand-edit the patch in the same config line.
 
 ### How changes take effect

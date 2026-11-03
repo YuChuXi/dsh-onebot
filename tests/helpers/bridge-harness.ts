@@ -17,6 +17,7 @@ import WebSocket from 'ws'
 import { OneBotConnection } from '../../src/onebot/connection.js'
 import { ChatBridge } from '../../src/bridge/index.js'
 import type { ThinkingLevel } from '../../src/bridge/config.js'
+import type { ModelRoute } from '../../src/bridge/model-route.js'
 import { MediaStore } from '../../src/media/store.js'
 import { Transcriber } from '../../src/media/stt.js'
 import { TraceSink } from '../../src/ops/trace.js'
@@ -27,7 +28,7 @@ import { InjectChannel } from '../../src/inbound/inject.js'
  * recorded selection, else the agentOptions fallback (provider/model), else
  * undefined; select() records the selection — mirroring the durable
  * model/selection event the host's AgentModel appends. Selections keep every
- * field the bridge wrote (reasoningEffort included) so qq_thinking assertions
+ * field the bridge wrote (reasoningEffort included) so qq_model assertions
  * can read back the full selection object. */
 function makeFakeModel(agentOptions?: { provider?: string; model?: string; reasoningEffort?: string }) {
   type Selection = { provider: string; model: string; reasoningEffort?: string }
@@ -57,6 +58,8 @@ export function makeFakeAgents(
     tools?: Array<{ name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }>
     /** agents.create 收到的初始模型选项（思考强度接线断言）。 */
     createdAgentOptions?: Array<{ provider?: string; model?: string; reasoningEffort?: string }>
+    /** agents.resume 收到的初始模型选项（每 chat 绑定的恢复接线断言）。 */
+    resumedAgentOptions?: Array<{ provider?: string; model?: string; reasoningEffort?: string }>
   },
   opts?: { failCreateFor?: string; resumeOk?: boolean; createDelayMs?: number },
 ) {
@@ -120,6 +123,7 @@ export function makeFakeAgents(
       if (opts?.resumeOk !== true) throw new Error('not persisted')
       const sessionId = String(options.resumeSessionId)
       sessionIds.push(sessionId)
+      captured.resumedAgentOptions?.push({ ...options.agentOptions })
       const agent = {
         session: { id: sessionId, seq: 1, header: { cwd: process.cwd() } },
         status: 'idle',
@@ -149,7 +153,7 @@ export function makeFakeAgents(
 }
 
 /** Full bridge + WS harness: inbound via real WebSocket, outbound captured. */
-export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: string; maxImageBytes?: number; resumeOk?: boolean; createDelayMs?: number; transcriber?: Transcriber; trace?: TraceSink; ignoreSelf?: boolean; recorder?: InboundRecorder; inject?: InjectChannel; steerEnabled?: boolean; steerAllMembers?: boolean; steerAllowRestricted?: boolean; steerNotice?: boolean; log?: (level: string, message: string) => void; defaultModel?: () => { provider: string; model: string; reasoningEffort?: string }; thinkingPrivate?: ThinkingLevel; thinkingGroup?: ThinkingLevel }) {
+export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: string; maxImageBytes?: number; resumeOk?: boolean; createDelayMs?: number; transcriber?: Transcriber; trace?: TraceSink; ignoreSelf?: boolean; recorder?: InboundRecorder; inject?: InjectChannel; steerEnabled?: boolean; steerAllMembers?: boolean; steerAllowRestricted?: boolean; steerNotice?: boolean; log?: (level: string, message: string) => void; defaultModel?: () => { provider: string; model: string; reasoningEffort?: string }; thinkingPrivate?: ThinkingLevel; thinkingGroup?: ThinkingLevel; modelPrivate?: ModelRoute; modelGroup?: ModelRoute }) {
   const ctx = new Context()
   const sessionIds: string[] = []
   const captured = {
@@ -160,6 +164,7 @@ export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: st
     channelSkills: [] as string[],
     tools: [] as Array<{ name: string; execute: (args: unknown, exec: unknown) => Promise<unknown> }>,
     createdAgentOptions: [] as Array<{ provider?: string; model?: string; reasoningEffort?: string }>,
+    resumedAgentOptions: [] as Array<{ provider?: string; model?: string; reasoningEffort?: string }>,
   }
   const agents = makeFakeAgents(sessionIds, captured, opts)
   const sessions = { flush: vi.fn(async () => undefined) }
@@ -186,6 +191,8 @@ export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: st
       agentPreset: 'standard', workspacePath: mediaDir,
       ...(opts?.thinkingPrivate !== undefined ? { thinkingPrivate: opts.thinkingPrivate } : {}),
       ...(opts?.thinkingGroup !== undefined ? { thinkingGroup: opts.thinkingGroup } : {}),
+      ...(opts?.modelPrivate !== undefined ? { modelPrivate: opts.modelPrivate } : {}),
+      ...(opts?.modelGroup !== undefined ? { modelGroup: opts.modelGroup } : {}),
       // 插话四开关（缺省 = 不插话、仅管理员、受限成员放行、插话回执开）。
       ...(opts?.steerEnabled !== undefined ? { steerEnabled: opts.steerEnabled } : {}),
       ...(opts?.steerAllMembers !== undefined ? { steerAllMembers: opts.steerAllMembers } : {}),

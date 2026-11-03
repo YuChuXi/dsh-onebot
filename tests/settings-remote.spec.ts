@@ -29,9 +29,12 @@ import {
   createOnebotSettingsMethods,
   createRevisionState,
   getSettings,
+  getModelEfforts,
+  getSettingsWithChoices,
   listWorkspaces,
   updateSettings,
 } from '../src/settings-remote.js'
+import type { SettingsServices } from '../src/settings-remote.js'
 import type { WorkspaceRegistryLike } from '../src/bridge/index.js'
 
 /** configEditor 最小替身：rows = profile patch 中 dsh-onebot 的覆盖行文档。 */
@@ -288,7 +291,7 @@ describe('onebotSettings remote — W6 白名单扩展（观测/调试 5 键）'
   it('5 个新键入快照：默认值正确、落在 diagnostics 组、计入 ALL_KEYS', () => {
     const editor = new FakeConfigEditor()
     const snapshot = getSettings(editor, createRevisionState())
-    expect(ALL_KEYS).toHaveLength(35)
+    expect(ALL_KEYS).toHaveLength(37)
     expect(snapshot.groups.diagnostics).toEqual([...NEW_BOOLEAN_KEYS])
     for (const key of NEW_BOOLEAN_KEYS) {
       expect(snapshot.config[key]).toBe(NEW_DEFAULTS[key])
@@ -381,7 +384,7 @@ describe('onebotSettings remote — W6 失败守卫（configEditor 失败场景�
 describe('onebotSettings remote — W7 workspacePath 白名单（connection 组）', () => {
   it('workspacePath 入快照：默认值 \'\'、connection 组键序追加、计入 ALL_KEYS', () => {
     const snapshot = getSettings(new FakeConfigEditor(), createRevisionState())
-    expect(ALL_KEYS).toHaveLength(35)
+    expect(ALL_KEYS).toHaveLength(37)
     expect(SCHEMA_DEFAULTS.workspacePath).toBe('')
     expect(SETTINGS_GROUPS.connection).toEqual(['mode', 'host', 'port', 'url', 'accessToken', 'botQQ', 'workspacePath'])
     expect(snapshot.groups.connection).toEqual(SETTINGS_GROUPS.connection)
@@ -484,23 +487,73 @@ describe('onebotSettings remote — W7 listWorkspaces（workspace 注册表只�
   })
 })
 
-describe('onebotSettings remote — 插话四开关白名单扩展（behavior 组 16 键）', () => {
-  it('四开关入快照：默认值正确、behavior 组键序、ALL_KEYS 35', () => {
+describe('onebotSettings remote — 模型能力查询与动态档位', () => {
+  /** opencode-go/deepseek-v4.1-flash 不接受 off；其余 route 接受四档。 */
+  const services: SettingsServices = {
+    llm: {
+      resolveModelInfo: async (provider: string, model: string) => provider === 'opencode-go' && model === 'deepseek-v4.1-flash'
+        ? { reasoning: { efforts: [{ id: 'low' }, { id: 'high' }, { id: 'max' }] } }
+        : { reasoning: { efforts: [{ id: 'off' }, { id: 'low' }, { id: 'high' }, { id: 'max' }] } },
+      listProviders: () => [{ id: 'opencode-go', name: 'OpenCode Go' }, { id: 'deepseek' }],
+      listModels: async (provider: string) => provider === 'opencode-go'
+        ? [{ id: 'deepseek-v4.1-flash' }, { id: 'deepseek-v4.1' }]
+        : [{ id: 'deepseek-chat', name: 'DeepSeek Chat' }],
+    },
+    agentDefaultModel: { currentSelection: () => ({ provider: 'opencode-go', model: 'deepseek-v4.1-flash' }) },
+  }
+
+  it('getModelEfforts 按模型返回档位，供设置页切换模型时重算下拉', async () => {
+    await expect(getModelEfforts(services, 'opencode-go', 'deepseek-v4.1-flash')).resolves.toEqual({ efforts: ['low', 'high', 'max'] })
+    await expect(getModelEfforts(services, 'deepseek', 'deepseek-chat')).resolves.toEqual({ efforts: ['off', 'low', 'high', 'max'] })
+  })
+
+  it('快照附带动态档位（含 default）与模型目录：读路径', async () => {
+    const snapshot = await getSettingsWithChoices(new FakeConfigEditor(), createRevisionState(), services)
+    expect(snapshot.choices).toEqual({
+      thinkingPrivate: ['default', 'low', 'high', 'max'],
+      thinkingGroup: ['default', 'low', 'high', 'max'],
+    })
+    expect(snapshot.catalog).toEqual({
+      providers: [{ id: 'opencode-go', name: 'OpenCode Go' }, { id: 'deepseek', name: 'deepseek' }],
+      models: {
+        'opencode-go': [{ id: 'deepseek-v4.1-flash', name: 'deepseek-v4.1-flash' }, { id: 'deepseek-v4.1', name: 'deepseek-v4.1' }],
+        deepseek: [{ id: 'deepseek-chat', name: 'DeepSeek Chat' }],
+      },
+    })
+  })
+
+  it('保存后的快照同样带动态档位与目录（写路径与读路径一致）', async () => {
+    const editor = new FakeConfigEditor()
+    const written = await updateSettings(editor, createRevisionState(), { thinkingPrivate: 'off' }, undefined, services)
+    expect(written.choices).toEqual({
+      thinkingPrivate: ['default', 'low', 'high', 'max'],
+      thinkingGroup: ['default', 'low', 'high', 'max'],
+    })
+    expect(written.catalog).toEqual(await getSettingsWithChoices(new FakeConfigEditor(), createRevisionState(), services).then(s => s.catalog))
+    expect(editor.rows[0].config.thinkingPrivate).toBe('off')
+  })
+})
+
+describe('onebotSettings remote — 插话四开关（behavior 组）', () => {
+  it('四开关入快照：默认值正确、behavior 组键序、ALL_KEYS 37', () => {
     const snapshot = getSettings(new FakeConfigEditor(), createRevisionState())
-    expect(ALL_KEYS).toHaveLength(35)
+    expect(ALL_KEYS).toHaveLength(37)
     expect(SCHEMA_DEFAULTS.steerEnabled).toBe(false)
     expect(SCHEMA_DEFAULTS.steerAllMembers).toBe(false)
     expect(SCHEMA_DEFAULTS.steerAllowRestricted).toBe(true)
     expect(SCHEMA_DEFAULTS.steerNotice).toBe(true)
     expect(SETTINGS_GROUPS.behavior).toEqual([
-      'sendErrorNotice', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages', 'steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'steerNotice', 'sleepMode', 'sleepStart', 'sleepEnd', 'extraPromptPrivate', 'extraPromptGroup', 'thinkingPrivate', 'thinkingGroup',
+      'sendErrorNotice', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages', 'steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'steerNotice', 'sleepMode', 'sleepStart', 'sleepEnd',
     ])
+    // 私聊/群聊两大块：模型、思考强度、附加提示词各三项。
+    expect(SETTINGS_GROUPS.private).toEqual(['modelPrivate', 'thinkingPrivate', 'extraPromptPrivate'])
+    expect(SETTINGS_GROUPS.group).toEqual(['modelGroup', 'thinkingGroup', 'extraPromptGroup'])
     expect(snapshot.groups.behavior).toEqual(SETTINGS_GROUPS.behavior)
     expect(snapshot.config.steerEnabled).toBe(false)
     expect(snapshot.config.steerAllMembers).toBe(false)
     expect(snapshot.config.steerAllowRestricted).toBe(true)
     expect(snapshot.config.steerNotice).toBe(true)
-    expect(snapshot.effect).toBe('restart') // 与全部 35 键同粒度：热重启生效
+    expect(snapshot.effect).toBe('restart') // 与全部 37 键同粒度：热重启生效
   })
 
   it('四开关写入走布尔通道：合法值进覆盖行并递增 revision；非法值拒写 bad-request 且 edit 零调用', async () => {
@@ -535,9 +588,9 @@ describe('onebotSettings remote — 插话四开关白名单扩展（behavior �
 })
 
 describe('onebotSettings remote — 出站节流三键（behavior 组）', () => {
-  it('三键入快照：默认 300/60/30、behavior 组键序、ALL_KEYS 33', () => {
+  it('三键入快照：默认 300/60/30、behavior 组键序、ALL_KEYS 37', () => {
     const snapshot = getSettings(new FakeConfigEditor(), createRevisionState())
-    expect(ALL_KEYS).toHaveLength(35)
+    expect(ALL_KEYS).toHaveLength(37)
     expect(SCHEMA_DEFAULTS.outboundIntervalBaseMs).toBe(300)
     expect(SCHEMA_DEFAULTS.outboundIntervalPerCharMs).toBe(60)
     expect(SCHEMA_DEFAULTS.outboundIntervalJitterPct).toBe(30)

@@ -53,7 +53,7 @@ describe('inbound pipeline', () => {
     // context (installChannelScope), not the plugin context.
     expect(h.captured.channelTools).toEqual(expect.arrayContaining([
       'qq_send_image', 'qq_send_voice', 'qq_send_video', 'qq_send_file',
-      'qq_send_forward', 'qq_napcat_api', 'qq_group_history', 'qq_thinking',
+      'qq_send_forward', 'qq_napcat_api', 'qq_group_history', 'qq_model',
     ]))
     expect(h.captured.channelSections).toContain('channel:dsh-onebot')
     expect(h.captured.channelSkills).toContain('qq-chat')

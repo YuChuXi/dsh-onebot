@@ -56,7 +56,7 @@ describe('TimerRunner', () => {
     const dir = await tempDir()
     const first = new TimerRunner({ dir, deliver: async () => undefined })
     const entry = await first.create('private:10001', { title: '周报', prompt: '写周报' }, {
-      weekly: { time: '09:00', time_zone: 'Asia/Shanghai', weekdays: [1] },
+      weekly: { time: '09:00:00', time_zone: 'Asia/Shanghai', weekdays: [1] },
     })
     first.stop()
     const second = new TimerRunner({ dir, deliver: async () => undefined })

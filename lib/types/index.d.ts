@@ -138,6 +138,10 @@ export interface Config {
     thinkingPrivate: 'off' | 'low' | 'high' | 'max' | 'default';
     /** 群聊新建会话的思考强度；default = 跟随部署默认。 */
     thinkingGroup: 'off' | 'low' | 'high' | 'max' | 'default';
+    /** 私聊使用的模型：`provider/model`；留空 = 部署默认。 */
+    modelPrivate: string;
+    /** 群聊使用的模型：`provider/model`；留空 = 部署默认。 */
+    modelGroup: string;
     mediaDir: string;
     tempTtlHours: number;
     outboundImageMaxBytes: number;

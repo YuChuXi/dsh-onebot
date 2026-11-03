@@ -29,8 +29,8 @@
 | 入站 | 私聊/群聊；载荷是 **JSON 记录数组**（按时间升序，末条为当前消息，其余是它之前最近的群聊窗口；记录含 qq/nickname/id/time/message，群主与管理员另有 role）；群聊窗口按持久化水位 `{time,id}` 从 `get_group_msg_history` 截取，滑出历史时标注「更早的消息已省略」，注入过的消息不再重复注入；段数组直读（无 CQ 字符串层）、@/回复触发（fail-closed；回复仅认机器人自己的消息，作者由 get_msg 证实，且与引用展开共用同一次查询）、媒体段回填本机路径（图片四路解析 url/base64/file/hash、大图自动压缩长边 ≤`inboundImageMaxPx`、GIF 不压、文件段双通道 get_private_file_url + get_file base64/url 回退），取不到时写成「(图片未取到)」这类明确说明；引用与合并转发在原位置展开为被引记录与节点记录；表情段带中文名；戳一戳唤醒，其他人之间的戳并入上文 |
 | 语音 | ffmpeg 转 16kHz WAV + whisper 转写（openai-whisper / whisper.cpp / 自定义命令）；**非阻塞**：语音消息先以 `record` 段（带本机路径）进入回合（不阻塞回复），转写完成后以「（语音转写：…）」补递（默认超时 60s）；转写失败/超时/空结果保留 `record` 段为最终状态 |
 | 出站 | **模型调用 `qq_send_*` 工具才是唯一发言出口**：回合的助手文本不会自动发送（模型不发就是不发）；合并转发用 `qq_send_forward`（群/私聊）、按字数节流（基础间隔 300ms + 每字 60ms + ±30% 抖动，见下方三个配置键）、正在输入提示（set_input_status，仅私聊） |
-| 命令 | 斜杠命令（仅管理员）：`/new` 开新会话、`/session` 查看可切回历史会话并按序号切回、`/model` 查看或切换当前会话模型（`--default` 修改部署默认；无参输出两级序号列表，回复序号选 provider → 再回复序号选模型）、`/compact` 转发宿主的上下文压缩命令；其余斜杠文本一律交给模型 |
-| 工具 | `qq_send_message`（唯一通用出口，支持文本/图片/语音/视频/文件段）、`qq_send_text`、`qq_send_image`（≤9 张，路径或 URL）、`qq_send_voice`、`qq_send_video`、`qq_send_file`、`qq_send_forward`、`qq_send_poke`（戳一戳）、`qq_list_stickers`（收藏表情列表）、`qq_send_sticker`（发表情：收藏/图片/商城）、`qq_collect_sticker`（收藏表情）、`qq_napcat_api`（22 个白名单 action）、`qq_end_turn`（结束回合）、`qq_create_schedule` / `qq_list_schedules` / `qq_delete_schedule` / `qq_update_schedule`（群/私聊定时任务，规则与 dsh 的 `schedule_*` 一致：相对延时、绝对时刻、固定间隔、每日、每周、cron）、`qq_group_history`、`qq_thinking`（查看/设置会话级或部署默认思考强度）、文件编辑工具 `code_safe_edit` 等已拆至独立插件 dsh-safe-edit（见下文「安全编辑」） |
+| 命令 | 斜杠命令（仅管理员）：`/new` 开新会话、`/session` 查看可切回历史会话并按序号切回、`/model` 查看或切换当前会话模型（`--default` 修改部署默认；无参输出两级序号列表，回复序号选 provider → 再回复序号选模型）；按会话类型的长期模型在设置页「私聊」「群聊」两块分别用下拉配置（`modelPrivate` / `modelGroup`）；`/compact` 转发宿主的上下文压缩命令；其余斜杠文本一律交给模型 |
+| 工具 | `qq_send_message`（唯一通用出口，支持文本/图片/语音/视频/文件段）、`qq_send_text`、`qq_send_image`（≤9 张，路径或 URL）、`qq_send_voice`、`qq_send_video`、`qq_send_file`、`qq_send_forward`、`qq_send_poke`（戳一戳）、`qq_list_stickers`（收藏表情列表）、`qq_send_sticker`（发表情：收藏/图片/商城）、`qq_collect_sticker`（收藏表情）、`qq_napcat_api`（22 个白名单 action）、`qq_end_turn`（结束回合）、`qq_create_schedule` / `qq_list_schedules` / `qq_delete_schedule` / `qq_update_schedule`（群/私聊定时任务，规则与 dsh 的 `schedule_*` 一致：相对延时、绝对时刻、固定间隔、每日、每周、cron）、`qq_group_history`、`qq_model`（查看生效模型与配置指定；切换当前会话或部署默认的模型/思考强度）、文件编辑工具 `code_safe_edit` 等已拆至独立插件 dsh-safe-edit（见下文「安全编辑」） |
 | 权限 | 管理员白名单（`ONEBOT_ALLOWED_USERS`）、dm/group 策略（open/allowlist/disabled）、群聊 @提及 gating、受限用户 [受限用户:仅问答] 软限制 |
 | 会话 | 每个 QQ 会话一个持久 Agent（session id 稳定派生），重启后自动 resume；按 `agentPreset`/`workspacePath` 挂载到 preset 与工作区；每轮结束 flush 落盘 |
 | 运维 | 热加载：profile 层 patch 的 **config 覆盖**与 **insert 新增/删除**均热生效——插件 fiber 秒级原地重启（宿主进程不重启；代价：QQ 桥一次秒级重连、在途回合中断）；touch/内容未变不触发任何动作；bundle 自带 patch、仓库模板、部署副本的 patch 文件与根配置 `cordis.yml` 的改动**不**热生效；临时媒体 TTL 过期清理 |
@@ -173,8 +173,10 @@ WS 连接、图片下载、文件解析都依赖这条网络通路；NapCat 与 
 | `steerAllMembers` | `false` | 插话资格（插话开关打开时生效）：开=所有成员都能插话；关（默认）=仅管理员。不具备资格的消息按排队处理（入队+排队提示）。设置页 behavior 组可改，热重启生效 |
 | `steerAllowRestricted` | `true` | 受限成员插话（插话开关打开时生效）：开（默认）=群内受限成员（非管理员且 `restrictedMemberPrefix` 开）也能插话；关=受限成员始终排队。设置页 behavior 组可改，热重启生效 |
 | `steerNotice` | `true` | 插话提示：插话成功时回一句「已作为补充指令提交给当前任务」；关=静默插话。设置页 behavior 组可改，热重启生效 |
-| `thinkingPrivate` | `default` | 私聊新建会话的思考强度：`off`/`low`/`high`/`max`；`default` = 跟随部署默认。已有会话保留自己的选择，不会被本项覆盖 |
-| `thinkingGroup` | `default` | 群聊新建会话的思考强度，取值与生效规则同 `thinkingPrivate` |
+| `thinkingPrivate` | `default` | 私聊新建会话的思考强度；`default` = 跟随部署默认。设置页为下拉，选项由所选私聊模型的能力决定；切换模型时下拉会即时重算 |
+| `thinkingGroup` | `default` | 群聊新建会话的思考强度，规则同 `thinkingPrivate` |
+| `modelPrivate` | `''` | 私聊使用的模型，`<provider>/<model>`；留空 = 跟随部署默认。设置页「私聊」块用两级下拉选择（provider → model），选项来自宿主模型目录 |
+| `modelGroup` | `''` | 群聊使用的模型，`<provider>/<model>`；留空 = 跟随部署默认。规则同 `modelPrivate` |
 | `sendErrorNotice` | `true` | 一轮运行出错时向用户发送 ⚠️ 错误提示 |
 | `outboundIntervalBaseMs` | `300` | 同一会话相邻两条出站消息的固定间隔（毫秒） |
 | `outboundIntervalPerCharMs` | `60` | 每条消息按字数追加的间隔（毫秒/字） |
@@ -226,13 +228,18 @@ WS 连接、图片下载、文件解析都依赖这条网络通路；NapCat 与 
 dsh Web GUI 的设置页提供本插件的可视化配置（host-plane Remote `onebotSettings`，写入 profile 层
 `cordis.patch.yml` 中 `dsh-onebot` 条目的 config 覆盖行——与手改 patch、宿主原生设置页是同一个持久层）。
 
-### 四组 35 键
+### 六组 37 键
+
+设置页按「私聊」「群聊」分成两个大块，各自的模型、思考强度、附加提示词都在块内；全部选项均为下拉
+（模型为 provider → model 两级下拉，思考强度随所选模型的能力即时重算）。
 
 | 组 | 键 |
 |---|---|
 | connection（连接） | `mode`、`host`、`port`、`url`、`accessToken`、`botQQ`、`workspacePath` |
 | permissions（权限） | `requireMention`、`adminUsers`、`dmPolicy`、`groupPolicy`、`allowAllUsers`、`allowFrom`、`groupAllowFrom` |
-| behavior（行为） | `sendErrorNotice`、`outboundIntervalBaseMs`、`outboundIntervalPerCharMs`、`outboundIntervalJitterPct`、`recentMessages`、`steerEnabled`、`steerAllMembers`、`steerAllowRestricted`、`steerNotice`、`sleepMode`、`sleepStart`、`sleepEnd`、`extraPromptPrivate`、`extraPromptGroup`、`thinkingPrivate`、`thinkingGroup` |
+| private（私聊） | `modelPrivate`、`thinkingPrivate`、`extraPromptPrivate` |
+| group（群聊） | `modelGroup`、`thinkingGroup`、`extraPromptGroup` |
+| behavior（行为） | `sendErrorNotice`、`outboundIntervalBaseMs`、`outboundIntervalPerCharMs`、`outboundIntervalJitterPct`、`recentMessages`、`steerEnabled`、`steerAllMembers`、`steerAllowRestricted`、`steerNotice`、`sleepMode`、`sleepStart`、`sleepEnd` |
 | diagnostics（诊断） | `traceEnabled`、`recordInbound`、`inboxRedact`、`injectEnabled`、`injectDryRun` |
 
 `accessToken` 在设置页做密码型输入，快照返回侧脱敏（不回显明文）；写入侧仍在 patch 文件明文落盘。
@@ -240,7 +247,7 @@ dsh Web GUI 的设置页提供本插件的可视化配置（host-plane Remote `o
 ### 与 patch config 的优先级
 
 **schema 默认值 ← bundle/底层 patch（继承层） ← profile 覆盖行（设置页写这里）**；同一层内后写的 patch
-条目胜出。设置页键与手改 patch 是同一层的同一行，不存在两套优先级。四组 35 键之外的键
+条目胜出。设置页键与手改 patch 是同一层的同一行，不存在两套优先级。六组 37 键之外的键
 （media/STT/性能/`agentPreset` 等低频键）不设 UI，仍在同一行 config 手改 patch。
 
 ### 生效方式

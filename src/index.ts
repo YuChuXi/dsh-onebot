@@ -18,6 +18,7 @@ import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type Z from '@deepseek-ai/schemastery'
 import type { OneBotEvent } from './onebot/connection.js'
 import type { BridgeDeps, SessionTitlePort, WorkspaceRegistryLike } from './bridge/config.js'
+import { parseModelRoute } from './bridge/model-route.js'
 import type { AccessPolicyConfig } from './chat/index.js'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -135,6 +136,10 @@ export interface Config {
   thinkingPrivate: 'off' | 'low' | 'high' | 'max' | 'default'
   /** 群聊新建会话的思考强度；default = 跟随部署默认。 */
   thinkingGroup: 'off' | 'low' | 'high' | 'max' | 'default'
+  /** 私聊使用的模型：`provider/model`；留空 = 部署默认。 */
+  modelPrivate: string
+  /** 群聊使用的模型：`provider/model`；留空 = 部署默认。 */
+  modelGroup: string
   mediaDir: string
   tempTtlHours: number
   outboundImageMaxBytes: number
@@ -259,6 +264,10 @@ export const Config: Z<Config> = z.object({
     .description('私聊新建会话的思考强度：off/low/high/max；default=跟随部署默认。已有会话保留自己的选择'),
   thinkingGroup: z.union([z.const('off'), z.const('low'), z.const('high'), z.const('max'), z.const('default')]).default('default')
     .description('群聊新建会话的思考强度：off/low/high/max；default=跟随部署默认。已有会话保留自己的选择'),
+  modelPrivate: z.string().default('')
+    .description('私聊使用的模型：`provider/model`（如 opencode-go/deepseek-v4.1-flash）；留空 = 部署默认。设置页用下拉选择，保存时按宿主模型能力校验'),
+  modelGroup: z.string().default('')
+    .description('群聊使用的模型：`provider/model`；留空 = 部署默认。设置页用下拉选择，保存时按宿主模型能力校验'),
   mediaDir: z.string().default('')
     .description('入站媒体与映射文件目录；留空默认 <dsh-home>/media/onebot'),
   tempTtlHours: z.number().default(6)
@@ -338,6 +347,8 @@ const LOG_LEVEL_RANK: Record<Config['logLevel'], number> = { debug: 0, info: 1, 
 export function apply(ctx: Context, config: Config): void {
   const mediaDir = config.mediaDir !== '' ? config.mediaDir : defaultMediaDir()
   const policy = resolvePolicy(config)
+  const modelPrivate = parseModelRoute(config.modelPrivate, 'modelPrivate')
+  const modelGroup = parseModelRoute(config.modelGroup, 'modelGroup')
   /** Console log line callback (level, message) — shared by the bridge deps,
    * the connection log port and the host-ready boot gate below (M2-C5b). */
   const log = (level: 'info' | 'warn' | 'error' | 'debug', message: string): void => {
@@ -423,6 +434,11 @@ export function apply(ctx: Context, config: Config): void {
     llmCatalog: {
       listProviders: () => ctx.llm.listProviders(),
       listModels: provider => ctx.llm.listModels(provider),
+      // 适配器未暴露 reasoning 时不设档位（空数组）；未知 route 让 llm 抛错。
+      resolveReasoningEfforts: async (provider, model) => {
+        const info = await ctx.llm.resolveModelInfo(provider, model)
+        return info.reasoning === undefined ? [] : info.reasoning.efforts.map(effort => String(effort.id))
+      },
     },
     connection,
     dshHome: dshHome(),
@@ -465,6 +481,8 @@ export function apply(ctx: Context, config: Config): void {
       extraPromptGroup: config.extraPromptGroup,
       thinkingPrivate: config.thinkingPrivate,
       thinkingGroup: config.thinkingGroup,
+      modelPrivate,
+      modelGroup,
       mediaDir,
       maxImageBytes: config.outboundImageMaxBytes,
       maxVoiceBytes: config.maxVoiceBytes,
