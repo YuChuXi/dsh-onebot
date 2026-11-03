@@ -241,16 +241,17 @@ The dsh Web GUI settings page exposes this plugin's configuration visually (a ho
 
 ### Six groups, 37 keys
 
-The page splits into "Private chats" and "Group chats" blocks, each holding that chat type's model,
-thinking effort, and extra prompt. Every option is a dropdown (the model is a two-level provider → model
-dropdown; the thinking-effort list is recomputed from the selected model's capabilities).
+The page splits into "Private chats" and "Group chats" blocks: that chat type's admission (policy/allowlist),
+model, thinking effort, and extra prompt all live in its block; global keys stay under "Connection",
+"Permissions", "Behavior", and "Diagnostics". Model and thinking effort are dropdowns (the model is a two-level
+provider → model dropdown; the level list is recomputed from the selected model's capabilities).
 
 | Group | Keys |
 |---|---|
 | connection | `mode`, `host`, `port`, `url`, `accessToken`, `botQQ`, `workspacePath` |
-| permissions | `requireMention`, `adminUsers`, `dmPolicy`, `groupPolicy`, `allowAllUsers`, `allowFrom`, `groupAllowFrom` |
-| private | `modelPrivate`, `thinkingPrivate`, `extraPromptPrivate` |
-| group | `modelGroup`, `thinkingGroup`, `extraPromptGroup` |
+| private | `modelPrivate`, `thinkingPrivate`, `extraPromptPrivate`, `dmPolicy`, `allowFrom` |
+| group | `modelGroup`, `thinkingGroup`, `extraPromptGroup`, `requireMention`, `groupPolicy`, `groupAllowFrom` |
+| permissions | `adminUsers`, `allowAllUsers` |
 | behavior | `sendErrorNotice`, `outboundIntervalBaseMs`, `outboundIntervalPerCharMs`, `outboundIntervalJitterPct`, `recentMessages`, `steerEnabled`, `steerAllMembers`, `steerAllowRestricted`, `steerNotice`, `sleepMode`, `sleepStart`, `sleepEnd` |
 | diagnostics | `traceEnabled`, `recordInbound`, `inboxRedact`, `injectEnabled`, `injectDryRun` |
 

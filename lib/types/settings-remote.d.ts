@@ -53,11 +53,10 @@ export declare const NAMESPACE = "onebotSettings";
 /** 快照固定值：37 键均为插件级热重启生效（T1 §5）。 */
 export declare const REMOTE_EFFECT = "restart";
 /** 设置页 UI 六组 37 键（与 src/index.ts Config schema 的 Config 面向面板的键一一对应）。
- *  connection/permissions/behavior 三组是连接、权限与行为面；diagnostics（诊断）
- *  组收纳观测/调试布尔键——它们默认关、属观测/调试面，与前三组的使用频率与
- *  风险等级都不同，独立分组让「默认全关的调试开关」一眼可辨。
- *  behavior 组的插话开关以布尔形式暴露（steerEnabled/steerAllMembers/
- *  steerAllowRestricted/steerNotice）；附加提示词按私聊/群聊分列。 */
+ *  connection 是连接面；private/group 是两个大块——各自收纳该会话类型的模型、思考强度、
+ *  附加提示词与准入（策略/白名单）；permissions 只剩对两种会话同时生效的管理员与总开关；
+ *  behavior 收纳全部会话共用的回复/节流/休眠；diagnostics 收纳观测/调试开关——它们默认关、
+ *  属观测面，独立分组让「默认全关的调试开关」一眼可辨。 */
 export declare const SETTINGS_GROUPS: Readonly<Record<string, readonly string[]>>;
 /** schema 默认值（摘自 src/index.ts 的 Config schema），快照生效值的底层。 */
 export declare const SCHEMA_DEFAULTS: Readonly<Record<string, unknown>>;

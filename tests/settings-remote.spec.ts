@@ -545,9 +545,11 @@ describe('onebotSettings remote — 插话四开关（behavior 组）', () => {
     expect(SETTINGS_GROUPS.behavior).toEqual([
       'sendErrorNotice', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages', 'steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'steerNotice', 'sleepMode', 'sleepStart', 'sleepEnd',
     ])
-    // 私聊/群聊两大块：模型、思考强度、附加提示词各三项。
-    expect(SETTINGS_GROUPS.private).toEqual(['modelPrivate', 'thinkingPrivate', 'extraPromptPrivate'])
-    expect(SETTINGS_GROUPS.group).toEqual(['modelGroup', 'thinkingGroup', 'extraPromptGroup'])
+    // 私聊/群聊两大块：模型、思考强度、附加提示词 + 各自的准入（策略/白名单）。
+    expect(SETTINGS_GROUPS.private).toEqual(['modelPrivate', 'thinkingPrivate', 'extraPromptPrivate', 'dmPolicy', 'allowFrom'])
+    expect(SETTINGS_GROUPS.group).toEqual(['modelGroup', 'thinkingGroup', 'extraPromptGroup', 'requireMention', 'groupPolicy', 'groupAllowFrom'])
+    // 通用权限只剩对两种会话同时生效的键。
+    expect(SETTINGS_GROUPS.permissions).toEqual(['adminUsers', 'allowAllUsers'])
     expect(snapshot.groups.behavior).toEqual(SETTINGS_GROUPS.behavior)
     expect(snapshot.config.steerEnabled).toBe(false)
     expect(snapshot.config.steerAllMembers).toBe(false)

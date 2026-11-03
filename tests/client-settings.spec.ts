@@ -182,7 +182,7 @@ describe('T4 客户端 bundle — descriptor 契约核对（与 T3 src/settings-
 describe('T4 客户端 bundle — 六组 37 键（分组/键集/默认值 = T1 §4 表 + W6 诊断组 + W7 workspacePath + 私聊/群聊两块 = T3 常量）', () => {
   it('分组与键序逐字对齐 host SETTINGS_GROUPS', () => {
     expect(client.GROUP_KEYS).toEqual(SETTINGS_GROUPS)
-    expect(groups.map((group) => group.id)).toEqual(['connection', 'permissions', 'private', 'group', 'behavior', 'diagnostics'])
+    expect(groups.map((group) => group.id)).toEqual(['connection', 'private', 'group', 'permissions', 'behavior', 'diagnostics'])
     expect(allFields.map((field) => field.key).sort()).toEqual([...ALL_KEYS].sort())
     expect(allFields).toHaveLength(37)
   })
@@ -217,7 +217,7 @@ describe('T4 客户端 bundle — 六组 37 键（分组/键集/默认值 = T1 �
   })
 
   it('分组标题与字段 label 为中文（T4 要求）', () => {
-    expect(groups.map((group) => group.title)).toEqual(['连接', '权限', '私聊', '群聊', '行为', '诊断'])
+    expect(groups.map((group) => group.title)).toEqual(['连接', '私聊', '群聊', '权限', '行为', '诊断'])
     for (const field of allFields) expect(field.label).toMatch(/\p{Script=Han}/u)
   })
 
@@ -244,9 +244,9 @@ describe('T4 客户端 bundle — 渲染函数模块级可测（renderGroup 纯�
 
   it('六组各产出标题与逐字段控件行（37 行 obx-field）', () => {
     const sections = renderAll(draft({ config: SCHEMA_DEFAULTS }))
-    expect(sections.map((section) => (section.props as Record<string, unknown>)['data-group'])).toEqual(['connection', 'permissions', 'private', 'group', 'behavior', 'diagnostics'])
+    expect(sections.map((section) => (section.props as Record<string, unknown>)['data-group'])).toEqual(['connection', 'private', 'group', 'permissions', 'behavior', 'diagnostics'])
     const titles = sections.map((section) => ((section.children[0] as StubElement).children[0] as string))
-    expect(titles).toEqual(['连接', '权限', '私聊', '群聊', '行为', '诊断'])
+    expect(titles).toEqual(['连接', '私聊', '群聊', '权限', '行为', '诊断'])
     const fieldRows = sections.flatMap((section) => walk(section).filter((element) => element.type === 'div' && element.props.className === 'obx-field'))
     expect(fieldRows).toHaveLength(37)
   })

@@ -230,15 +230,16 @@ dsh Web GUI 的设置页提供本插件的可视化配置（host-plane Remote `o
 
 ### 六组 37 键
 
-设置页按「私聊」「群聊」分成两个大块，各自的模型、思考强度、附加提示词都在块内；全部选项均为下拉
-（模型为 provider → model 两级下拉，思考强度随所选模型的能力即时重算）。
+设置页按「私聊」「群聊」分成两个大块：该类型的准入（策略/白名单）、模型、思考强度、附加提示词都在
+块内；全局项留在「连接」「权限」「行为」「诊断」。模型与思考强度都是下拉（模型为 provider → model
+两级，档位随所选模型的能力即时重算）。
 
 | 组 | 键 |
 |---|---|
 | connection（连接） | `mode`、`host`、`port`、`url`、`accessToken`、`botQQ`、`workspacePath` |
-| permissions（权限） | `requireMention`、`adminUsers`、`dmPolicy`、`groupPolicy`、`allowAllUsers`、`allowFrom`、`groupAllowFrom` |
-| private（私聊） | `modelPrivate`、`thinkingPrivate`、`extraPromptPrivate` |
-| group（群聊） | `modelGroup`、`thinkingGroup`、`extraPromptGroup` |
+| private（私聊） | `modelPrivate`、`thinkingPrivate`、`extraPromptPrivate`、`dmPolicy`、`allowFrom` |
+| group（群聊） | `modelGroup`、`thinkingGroup`、`extraPromptGroup`、`requireMention`、`groupPolicy`、`groupAllowFrom` |
+| permissions（权限） | `adminUsers`、`allowAllUsers` |
 | behavior（行为） | `sendErrorNotice`、`outboundIntervalBaseMs`、`outboundIntervalPerCharMs`、`outboundIntervalJitterPct`、`recentMessages`、`steerEnabled`、`steerAllMembers`、`steerAllowRestricted`、`steerNotice`、`sleepMode`、`sleepStart`、`sleepEnd` |
 | diagnostics（诊断） | `traceEnabled`、`recordInbound`、`inboxRedact`、`injectEnabled`、`injectDryRun` |
 
