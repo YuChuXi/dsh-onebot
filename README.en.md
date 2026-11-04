@@ -127,7 +127,7 @@ Mount it in `~/.dsh/config.yaml` (create it if missing):
         adminUsers: ['<your-QQ-number>']   # required: at least one admin, otherwise private chats & slash commands are unavailable
 ```
 
-> ⚠️ **You must configure at least one admin on first setup** (`adminUsers` or the `ONEBOT_ALLOWED_USERS` env var):
+> **You must configure at least one admin on first setup** (`adminUsers` or the `ONEBOT_ALLOWED_USERS` env var):
 > `dmPolicy: open` (default) only allows admins to DM, and slash commands are admin-only too; with no admin,
 > nobody can talk to the bot.
 > For development you can temporarily set `allowAllUsers: true` (or `ONEBOT_ALLOW_ALL_USERS=true`) to allow everyone.
@@ -180,10 +180,9 @@ default). Common options:
 | `injectEnabled` | `false` | event injection channel (W1, **DEBUG-ONLY**): when on, the bridge polls `mediaDir/qq-inject.jsonl` every `injectIntervalMs` and feeds each new line (one OneBot message-event JSON per line) through the **real inbound pipeline** (trace events tagged `stage=inject`); lines that already existed at startup are skipped and reported. Trust boundary: injection is a debug channel, disabled by default — do not enable in production |
 | `injectDryRun` | `true` | inject dry-run (W1, **strongly keep `true`**): every outbound WRITE triggered by an injected round (sends/recalls, **including the asynchronous agent turn's final reply** — intercepted at the outbound action layer) is counted with its original text in the trace stream and never reaches real QQ; a real message to the same chat clears the interception immediately (never collaterally intercepting real users); `false` = injected rounds really send, isolated environments only |
 | `injectIntervalMs` | `2000` | inject queue poll interval (ms, W1; minimum 500) |
-| `steerEnabled` | `false` | how a new message is handled while the chat's task is running (steer switch): on = submit it as a supplementary instruction into the running turn (read at the agent's next step) for every message shape (text / image / file / voice / quoted / merged forward); off (default) = queue it as the next turn after the current task ends, with at most one queue notice per running turn. Without a running task this switch has no effect. Editable in the settings page behavior group; applies after a hot restart |
-| `steerAllMembers` | `false` | steer eligibility (active while the steer switch is on): on = every member may steer; off (default) = admins only. Messages from senders without eligibility take the queue path (enqueue + queue notice). Editable in the settings page behavior group; applies after a hot restart |
+| `steerEnabled` | `false` | how a new message is handled while the chat's task is running (steer switch): on = submit it as a supplementary instruction into the running turn (read at the agent's next step) for every message shape (text / image / file / voice / quoted / merged forward); off (default) = queue it as the next turn after the current task ends. Neither path sends a notice. Without a running task this switch has no effect. Editable in the settings page behavior group; applies after a hot restart |
+| `steerAllMembers` | `false` | steer eligibility (active while the steer switch is on): on = every member may steer; off (default) = admins only. Messages from senders without eligibility take the queue path. Editable in the settings page behavior group; applies after a hot restart |
 | `steerAllowRestricted` | `true` | restricted-member steer (active while the steer switch is on): on (default) = group members under the soft limit (non-admin with `restrictedMemberPrefix` on) may also steer; off = restricted members always take the queue path. Editable in the settings page behavior group; applies after a hot restart |
-| `steerNotice` | `true` | steer notice: reply「已作为补充指令提交给当前任务」when a message is steered in; off = silent steer. Editable in the settings page behavior group; applies after a hot restart |
 | `thinkingPrivate` | `default` | thinking effort for new private-chat sessions; `default` follows the deployment default. A dropdown in the settings page; its options come from the selected private-chat model's capabilities and refresh when the model changes |
 | `thinkingGroup` | `default` | thinking effort for new group-chat sessions; same rules as `thinkingPrivate` |
 | `modelPrivate` | `''` | model for private chats, `<provider>/<model>`; empty = deployment default. Chosen with a two-level provider → model dropdown in the settings page "Private chats" block |
@@ -193,7 +192,7 @@ default). Common options:
 | `restrictedMemberPrefix` | `true` | Prefix non-admin group messages with `[受限用户:仅问答]` (soft restriction) |
 | `adminUsers` | `[]` | admin QQ numbers; or the `ONEBOT_ALLOWED_USERS` env var. **At least one is required**, otherwise DMs (`dmPolicy=open`) and slash commands are unavailable to everyone |
 | `allowFrom` / `groupAllowFrom` | `[]` | allowlisted users/groups |
-| `sendErrorNotice` | `true` | Send a ⚠️ error notice to the user when a turn fails |
+| `sendErrorNotice` | `true` | Send an error notice to the user when a turn fails |
 | `outboundIntervalBaseMs` | `300` | fixed gap between two consecutive outbound messages in one chat (ms) |
 | `outboundIntervalPerCharMs` | `60` | extra gap per character of the message (ms/char) |
 | `outboundIntervalJitterPct` | `30` | random jitter applied to the computed gap (0–100, i.e. ±that percentage) |
@@ -215,7 +214,7 @@ default). Common options:
 | `workspacePath` | empty | workspace for sessions (empty = host process cwd; when unconfigured the plugin warns once at startup recommending an explicit value — the host exposes no programmable default-workspace query). The per-chat override is persisted to the mapping file and survives restarts |
 | `chatIdleEvictDays` | `7` | idle-session eviction (days): when a chat has had no activity for longer than this, its in-memory agent is cleaned up before the next inbound message is processed (the session is flushed to disk first and the mapping is kept, so a later message from the same chat resumes the original session); `0` = disabled |
 
-> ⚠️ **BREAKING (M0 security hardening)**: in reverse mode an empty `accessToken` refuses to start (fail-closed); the `host` default changed from `0.0.0.0` to `127.0.0.1` (loopback only) — cross-machine deployments must explicitly configure `host: 0.0.0.0`.
+> **BREAKING (M0 security hardening)**: in reverse mode an empty `accessToken` refuses to start (fail-closed); the `host` default changed from `0.0.0.0` to `127.0.0.1` (loopback only) — cross-machine deployments must explicitly configure `host: 0.0.0.0`.
 
 Env vars: `ONEBOT_ALLOWED_USERS` (comma-separated admins), `ONEBOT_ALLOW_ALL_USERS=true` (development).
 
@@ -252,7 +251,7 @@ provider → model dropdown; the level list is recomputed from the selected mode
 | private | `modelPrivate`, `thinkingPrivate`, `extraPromptPrivate`, `dmPolicy`, `allowFrom` |
 | group | `modelGroup`, `thinkingGroup`, `extraPromptGroup`, `requireMention`, `groupPolicy`, `groupAllowFrom` |
 | permissions | `adminUsers`, `allowAllUsers` |
-| behavior | `sendErrorNotice`, `outboundIntervalBaseMs`, `outboundIntervalPerCharMs`, `outboundIntervalJitterPct`, `recentMessages`, `steerEnabled`, `steerAllMembers`, `steerAllowRestricted`, `steerNotice`, `sleepMode`, `sleepStart`, `sleepEnd` |
+| behavior | `sendErrorNotice`, `outboundIntervalBaseMs`, `outboundIntervalPerCharMs`, `outboundIntervalJitterPct`, `recentMessages`, `steerEnabled`, `steerAllMembers`, `steerAllowRestricted`, `sleepMode`, `sleepStart`, `sleepEnd` |
 | diagnostics | `traceEnabled`, `recordInbound`, `inboxRedact`, `injectEnabled`, `injectDryRun` |
 
 `accessToken` is a password-style input in the settings page; snapshots redact it on return (no plaintext echo);

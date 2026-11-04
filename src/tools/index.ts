@@ -400,7 +400,7 @@ export function registerTools(
         const effort = level === 'default' ? undefined : level !== '' ? level : base?.reasoningEffort
         if (effort !== undefined) await assertLevelSupported(bridge, nextProvider, nextModel, String(effort))
         await store.saveSelection(selectionWithLevel({ provider: nextProvider, model: nextModel }, effort))
-        payload.summary = '✅ 部署默认模型：' + nextProvider + '/' + nextModel + '，思考强度 ' + levelLabel(effort)
+        payload.summary = '部署默认模型：' + nextProvider + '/' + nextModel + '，思考强度 ' + levelLabel(effort)
           + '（新建/恢复会话按此起步）'
         payload.provider = nextProvider
         payload.model = nextModel
@@ -422,7 +422,7 @@ export function registerTools(
         model: nextModel,
         ...(effort === undefined ? {} : { reasoningEffort: ReasoningEffortId(effort) }),
       })
-      payload.summary = '✅ 本会话已切换：' + nextProvider + '/' + nextModel
+      payload.summary = '本会话已切换：' + nextProvider + '/' + nextModel
         + '，思考强度 ' + levelLabel(effort) + '（下一步请求生效；长期默认在设置页「私聊」「群聊」两块配置）'
       payload.provider = nextProvider
       payload.model = nextModel

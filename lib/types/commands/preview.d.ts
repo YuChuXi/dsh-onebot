@@ -36,19 +36,11 @@ export declare function truncatePreview(text: string, maxLength: number): string
  * agent.inject context / goal continuation fallback); '' when the log
  * carries no user input at all. */
 export declare function sessionPreviewFromEvents(events: readonly SessionPreviewEvent[], maxLength?: number): string;
-/** Shorten a session id for the one-line list while keeping BOTH ends: every
- * onebot id shares the `onebot-…` head, so head-only truncation (e.g. the
- * first 12 characters) would render every entry of a chat identically — the
- * unique tail must survive for the id to stay recognizable. */
-export declare function shortSessionId(id: string): string;
 /** Cold-read one retired session's preview through the persistence port:
  * open a 'read' handle (never takes write ownership, works beside a live
- * writer), take the header's createdAt plus a small event prefix, then close
- * the handle — always, even when the read failed (AsyncDisposable: a leaked
- * handle pins backend resources). Returns undefined when the log is missing,
- * unreadable or corrupt; the caller renders 「（内容不可读）」 and neither
- * the rest of the list nor the switch-back flow is affected. */
-export declare function sessionPreviewFor(ctx: PreviewContext, sessionId: string): Promise<{
-    createdAt: number | undefined;
-    text: string;
-} | undefined>;
+ * writer), read a small event prefix, then close the handle — always, even
+ * when the read failed (AsyncDisposable: a leaked handle pins backend
+ * resources). Returns undefined when the log is missing, unreadable or
+ * corrupt; the caller renders 「（内容不可读）」 and neither the rest of the
+ * list nor the switch-back flow is affected. */
+export declare function sessionPreviewFor(ctx: PreviewContext, sessionId: string): Promise<string | undefined>;

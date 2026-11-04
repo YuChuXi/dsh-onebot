@@ -15,13 +15,6 @@ import type { OutboundSegment, SendOptions } from '../outbound/index.js';
 import type { ChatAgent } from '../registry/index.js';
 import type { ChatModelBinding } from './config.js';
 import { TimerRunner } from '../timers/index.js';
-/** T2 (P1): the queue notice sent to a chat when a message arrives while its
- * task is running under the default 'queue' policy — at most ONE per running
- * turn (the flag resets at turn/end) so a burst of queued messages never
- * spams the chat. Exported for the deterministic text wait in tests. */
-export declare const QUEUE_NOTICE_TEXT = "\u23F3 \u5F53\u524D\u4EFB\u52A1\u8FD0\u884C\u4E2D\uFF0C\u65B0\u6D88\u606F\u5DF2\u6392\u961F\uFF0C\u5C06\u5728\u5F53\u524D\u4EFB\u52A1\u7ED3\u675F\u540E\u4F9D\u6B21\u5904\u7406\u3002";
-/** 插话成功提示：自动插话与语音转写共用同一句。 */
-export declare const STEER_ACCEPTED_NOTICE = "\u2705 \u5DF2\u4F5C\u4E3A\u8865\u5145\u6307\u4EE4\u63D0\u4EA4\u7ED9\u5F53\u524D\u4EFB\u52A1\uFF0C\u6A21\u578B\u5C06\u5728\u4E0B\u4E00\u6B65\u8BFB\u53D6\u3002";
 /**
  * Bridge between OneBot events and dsh agents. Create via the constructor and
  * call start() from the plugin's effect; call stop() on disposal.
@@ -58,10 +51,6 @@ export declare class ChatBridge {
      * agent reply even with tracing off). Cleared by a real dispatch to the
      * chat or when the chat is removed. */
     private readonly injectRoundByChat;
-    /** T2 (P1): chats that already got the QUEUE_NOTICE_TEXT for their current
-     * running turn (one notice per turn; cleared at turn/end and on chat
-     * removal — bounded by the chat population). */
-    private readonly queueNoticeChats;
     /** Plugin version + git commit, read once for /ver. */
     private pluginVersion;
     private pluginCommit;
@@ -270,12 +259,10 @@ export declare class ChatBridge {
      *   idle traffic);
      * - 插话开关打开（steerEnabled）且发送者具备资格（steerAllMembers，缺省仅管理员），
      *   受限成员还须 steerAllowRestricted 未关 → 消息经 steerMessage 内核提交进
-     *   运行中的回合（在最近 step 边界被读取，不新开回合）；steerNotice 未关时
-     *   回一句提交提示；
+     *   运行中的回合（在最近 step 边界被读取，不新开回合），不发送任何回执；
      * - otherwise（插话关闭 / 不具备资格 / 受限成员且该项已关）→ the dispatch
      *   path (agent.followup queues it as the next turn: consumed after the current
-     *   turn ends, in arrival order) plus the queue notice at most once per
-     *   running turn.
+     *   turn ends, in arrival order)，不发送任何排队提示。
      * 消息形态不再限制插话：进入这里的 text 已是完整载荷（带图/语音/引用的消息
      * 在入站管线里已完成媒体归一化与引用展开），插话只是把它塞进运行中的回合。
      * The running check reads the agent's own lifecycle state — the same

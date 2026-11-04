@@ -153,7 +153,7 @@ export function makeFakeAgents(
 }
 
 /** Full bridge + WS harness: inbound via real WebSocket, outbound captured. */
-export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: string; maxImageBytes?: number; resumeOk?: boolean; createDelayMs?: number; transcriber?: Transcriber; trace?: TraceSink; ignoreSelf?: boolean; recorder?: InboundRecorder; inject?: InjectChannel; steerEnabled?: boolean; steerAllMembers?: boolean; steerAllowRestricted?: boolean; steerNotice?: boolean; log?: (level: string, message: string) => void; defaultModel?: () => { provider: string; model: string; reasoningEffort?: string }; thinkingPrivate?: ThinkingLevel; thinkingGroup?: ThinkingLevel; modelPrivate?: ModelRoute; modelGroup?: ModelRoute }) {
+export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: string; maxImageBytes?: number; resumeOk?: boolean; createDelayMs?: number; transcriber?: Transcriber; trace?: TraceSink; ignoreSelf?: boolean; recorder?: InboundRecorder; inject?: InjectChannel; steerEnabled?: boolean; steerAllMembers?: boolean; steerAllowRestricted?: boolean; log?: (level: string, message: string) => void; defaultModel?: () => { provider: string; model: string; reasoningEffort?: string }; thinkingPrivate?: ThinkingLevel; thinkingGroup?: ThinkingLevel; modelPrivate?: ModelRoute; modelGroup?: ModelRoute }) {
   const ctx = new Context()
   const sessionIds: string[] = []
   const captured = {
@@ -193,11 +193,10 @@ export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: st
       ...(opts?.thinkingGroup !== undefined ? { thinkingGroup: opts.thinkingGroup } : {}),
       ...(opts?.modelPrivate !== undefined ? { modelPrivate: opts.modelPrivate } : {}),
       ...(opts?.modelGroup !== undefined ? { modelGroup: opts.modelGroup } : {}),
-      // 插话四开关（缺省 = 不插话、仅管理员、受限成员放行、插话回执开）。
+      // 插话三开关（缺省 = 不插话、仅管理员、受限成员放行）。
       ...(opts?.steerEnabled !== undefined ? { steerEnabled: opts.steerEnabled } : {}),
       ...(opts?.steerAllMembers !== undefined ? { steerAllMembers: opts.steerAllMembers } : {}),
       ...(opts?.steerAllowRestricted !== undefined ? { steerAllowRestricted: opts.steerAllowRestricted } : {}),
-      ...(opts?.steerNotice !== undefined ? { steerNotice: opts.steerNotice } : {}),
       // W1: optional decision-trace sink (absent = tracing off).
       trace: opts?.trace,
       // W1/T5: optional recorder / inject channel (absent = feature off).
@@ -269,8 +268,6 @@ export async function makeCmdHarness(opts?: {
   steerAllMembers?: boolean
   /** 受限成员插话：false = 一律排队，true/缺省 = 放行。 */
   steerAllowRestricted?: boolean
-  /** 插话成功回执：false = 静默，true/缺省 = 回一句提示。 */
-  steerNotice?: boolean
   /** T3 (P2): media dir override（重启恢复测试复用同一目录的注册表/映射文件）。 */
   mediaDir?: string
   commands?: unknown
@@ -333,7 +330,6 @@ export async function makeCmdHarness(opts?: {
       ...(opts?.steerEnabled !== undefined ? { steerEnabled: opts.steerEnabled } : {}),
       ...(opts?.steerAllMembers !== undefined ? { steerAllMembers: opts.steerAllMembers } : {}),
       ...(opts?.steerAllowRestricted !== undefined ? { steerAllowRestricted: opts.steerAllowRestricted } : {}),
-      ...(opts?.steerNotice !== undefined ? { steerNotice: opts.steerNotice } : {}),
       mediaDir, maxImageBytes: 8 * 1024 * 1024,
       maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
       agentPreset: 'standard', workspacePath: mediaDir,

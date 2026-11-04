@@ -10,7 +10,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ChatId } from '../chat/index.js'
 import type { AgentDefaultModelLike, BridgeDeps, LlmCatalogPort, SessionPersistenceLike } from '../bridge/config.js'
 import type { PendingSelection, SessionSwitchOutcome, SwitchableSession } from '../registry/index.js'
-import { PREVIEW_NO_CONTENT, PREVIEW_UNREADABLE, sessionPreviewFor, shortSessionId } from './preview.js'
+import { PREVIEW_NO_CONTENT, PREVIEW_UNREADABLE, sessionPreviewFor } from './preview.js'
 import { describeError } from '../shared/errors.js'
 
 /** 命令处理器可读的活跃会话视图（registry.ChatAgent 的结构子集）。 */
@@ -122,7 +122,6 @@ interface PendingPick {
  *   chatId (ChatId): 会话。
  *   kind (PendingSelection['kind']): 期望的快照种类。
  *   arg (string): 用户参数。
- *   command (string): 用于提示的命令名。
  *
  * Returns:
  *   Promise<PendingPick | null | undefined>: 见上。
@@ -132,19 +131,18 @@ async function resolveNumericSelection(
   chatId: ChatId,
   kind: PendingSelection['kind'],
   arg: string,
-  command: string,
 ): Promise<PendingPick | null | undefined> {
   if (!/^\d+$/.test(arg.trim())) return undefined
   const pending = ctx.pendingSelection(chatId)
   if (pending === undefined || pending.kind !== kind) return undefined
   if (Date.now() - pending.createdAt > PENDING_SELECTION_TTL_MS) {
     ctx.setPendingSelection(chatId, undefined)
-    await ctx.sendToChat(chatId, `❌ 序号选择已过期，请重新执行 ${command} 查看。`)
+    await ctx.sendToChat(chatId, '选项已过期。')
     return null
   }
   const item = pending.items[Number(arg.trim()) - 1]
   if (item === undefined) {
-    await ctx.sendToChat(chatId, `❌ 序号越界，请回复 ${command} 重新查看列表。`)
+    await ctx.sendToChat(chatId, '没有这个序号。')
     return null
   }
   ctx.setPendingSelection(chatId, undefined)
@@ -160,23 +158,12 @@ async function handleModelCommand(ctx: CommandContext, chatId: ChatId, arg: stri
     let out = '当前模型：' + cur
     const providerIds: string[] = []
     try {
-      const providers = ctx.llmCatalog?.listProviders() ?? []
-      for (const p of providers.slice(0, 6)) {
-        providerIds.push(p.id)
-        try {
-          const models = (await ctx.llmCatalog?.listModels(p.id)) ?? []
-          out += '\n' + p.id + ': ' + models.slice(0, 10).map(m => m.id).join(', ')
-        } catch (error) {
-          out += '\n' + p.id + ': （列表不可用）'
-          ctx.log('warn', 'listModels failed for ' + p.id + ': ' + String(error))
-        }
-      }
+      providerIds.push(...(ctx.llmCatalog?.listProviders() ?? []).slice(0, 6).map(p => p.id))
     } catch (error) {
-      out += '\n（模型列表不可用）'
       ctx.log('warn', 'listProviders failed: ' + String(error))
     }
     if (providerIds.length > 0) {
-      out += '\n可选来源：\n' + providerIds.map((id, i) => `${i + 1}. ${id}`).join('\n')
+      out += '\n可用来源：\n' + providerIds.map((id, i) => `${i + 1}. ${id}`).join('\n')
       out += '\n回复 /model <序号> 查看该来源的模型。'
       ctx.setPendingSelection(chatId, {
         kind: 'model',
@@ -188,7 +175,7 @@ async function handleModelCommand(ctx: CommandContext, chatId: ChatId, arg: stri
     await ctx.sendToChat(chatId, out)
     return
   }
-  const picked = await resolveNumericSelection(ctx, chatId, 'model', arg, '/model')
+  const picked = await resolveNumericSelection(ctx, chatId, 'model', arg)
   if (picked === null) return
   if (picked !== undefined) {
     if (picked.phase === 'providers') {
@@ -204,7 +191,7 @@ async function handleModelCommand(ctx: CommandContext, chatId: ChatId, arg: stri
   const rest = toDefault ? arg.slice(first.length).trim() : arg
   const m = /^(\S+)[\s/]+(\S+)$/.exec(rest)
   if (m === null) {
-    await ctx.sendToChat(chatId, '❌ 参数不完整或无法识别。\n用法：/model <provider> <model> 切换当前会话；/model --default <provider> <model> 修改部署默认')
+    await ctx.sendToChat(chatId, '用法：/model 看列表；回复序号选择。')
     return
   }
   const provider = m[1]
@@ -212,7 +199,7 @@ async function handleModelCommand(ctx: CommandContext, chatId: ChatId, arg: stri
   try {
     const models = (await ctx.llmCatalog?.listModels(provider)) ?? []
     if (models.length > 0 && !models.some(x => x.id === model)) {
-      await ctx.sendToChat(chatId, `❌ ${provider} 下没有模型 ${model}。可用：` + models.slice(0, 10).map(x => x.id).join(', ') + '\n用法：/model <provider> <model> 切换；/model 查看序号列表')
+      await ctx.sendToChat(chatId, `没有这个模型，发 /model 看看可用的。`)
       return
     }
   } catch (error) {
@@ -227,13 +214,13 @@ async function handleModelCommand(ctx: CommandContext, chatId: ChatId, arg: stri
         ctx.log('warn', 'saveSelection failed: ' + String(error))
       }
     }
-    await ctx.sendToChat(chatId, `✅ 已修改部署默认模型：${provider}/${model}（下一步生效）`)
+    await ctx.sendToChat(chatId, `已设为默认。`)
     return
   }
   if (chat !== undefined && chat.agent.model.current() !== undefined) {
     chat.agent.model.select(next)
   }
-  await ctx.sendToChat(chatId, `✅ 已切换当前会话模型：${provider}/${model}（下一步生效）`)
+  await ctx.sendToChat(chatId, `已切换。`)
 }
 
 /** /model 第二级：列出某来源的模型并快照为 phase 'models'。 */
@@ -243,12 +230,12 @@ async function sendModelPickList(ctx: CommandContext, chatId: ChatId, provider: 
     models = (await ctx.llmCatalog?.listModels(provider)) ?? []
   } catch (error) {
     ctx.log('warn', 'listModels failed for ' + provider + ': ' + String(error))
-    await ctx.sendToChat(chatId, `❌ 无法列出 ${provider} 的模型，请重新执行 /model 查看。`)
+    await ctx.sendToChat(chatId, `读取模型列表失败。`)
     return
   }
   const shown = models.slice(0, 10)
   if (shown.length === 0) {
-    await ctx.sendToChat(chatId, `（${provider} 下没有可用模型，请重新执行 /model 查看。）`)
+    await ctx.sendToChat(chatId, '这个来源下没有可用模型。')
     return
   }
   ctx.setPendingSelection(chatId, {
@@ -258,26 +245,23 @@ async function sendModelPickList(ctx: CommandContext, chatId: ChatId, provider: 
     items: shown.map(m => ({ label: m.id, payload: m.id })),
     createdAt: Date.now(),
   })
-  await ctx.sendToChat(chatId, `模型列表（${provider}）：\n` + shown.map((m, i) => `${i + 1}. ${m.id}`).join('\n') + '\n回复 /model <序号> 切换当前会话模型。')
+  await ctx.sendToChat(chatId, `模型列表（${provider}）：\n` + shown.map((m, i) => `${i + 1}. ${m.id}`).join('\n') + '\n回复 /model <序号> 切换。')
 }
 
 /** /session：列出可切回的历史会话，或按序号切回。 */
 async function handleSessionCommand(ctx: CommandContext, chatId: ChatId, arg: string): Promise<void> {
   if (arg.trim() === '') {
     const list = ctx.switchableSessions(chatId)
-    const current = ctx.currentSessionId(chatId)
     if (list.length === 0) {
-      await ctx.sendToChat(chatId, '当前 session：' + (current ?? '（未建立会话）') + '\n（该会话没有可切回的历史会话）\n用法：/session <序号> 切回；/new 切换下来的旧会话会进入列表。')
+      await ctx.sendToChat(chatId, '没有可切回的会话。')
       return
     }
     const lines = await Promise.all(list.map(async (entry, index) => {
       const preview = await sessionPreviewFor(ctx, entry.id)
-      const text = preview === undefined ? PREVIEW_UNREADABLE : (preview.text !== '' ? preview.text : PREVIEW_NO_CONTENT)
-      const created = preview?.createdAt !== undefined ? formatTimestamp(preview.createdAt) + ' 建立 · ' : ''
-      return `${index + 1}. ${text}（${created}${formatTimestamp(entry.retiredAt)} 退休 · ${shortSessionId(entry.id)}）`
+      const text = preview === undefined ? PREVIEW_UNREADABLE : (preview !== '' ? preview : PREVIEW_NO_CONTENT)
+      return `${index + 1}. ${text}`
     }))
-    let out = '当前 session：' + (current ?? '（未建立会话）') + '\n可切回历史会话：\n' + lines.join('\n')
-    out += '\n回复 /session <序号> 切回（当前会话会进入列表，可来回切换）。'
+    const out = '可切回的会话：\n' + lines.join('\n') + '\n回复 /session <序号> 切回。'
     ctx.setPendingSelection(chatId, {
       kind: 'session',
       items: list.map(e => ({ label: e.id, payload: e.id })),
@@ -288,72 +272,62 @@ async function handleSessionCommand(ctx: CommandContext, chatId: ChatId, arg: st
   }
   const chat = ctx.getChat(chatId)
   if (/^\d+$/.test(arg.trim()) && chat !== undefined && chat.busy) {
-    await ctx.sendToChat(chatId, '当前正在生成回复，请先 /stop 再切换会话。')
+    await ctx.sendToChat(chatId, '还在回复中。')
     return
   }
-  const picked = await resolveNumericSelection(ctx, chatId, 'session', arg, '/session')
+  const picked = await resolveNumericSelection(ctx, chatId, 'session', arg)
   if (picked === null) return
   if (picked === undefined) {
-    await ctx.sendToChat(chatId, '用法：/session 查看可切回会话；/session <序号> 切回。')
+    await ctx.sendToChat(chatId, '发 /session 看列表，回复序号切回。')
     return
   }
   const outcome = await ctx.switchSession(chatId, picked.payload)
   if (outcome.ok) {
-    await ctx.sendToChat(chatId, `✅ 已切回历史会话：${outcome.sessionId}\n（原会话已进入可切回列表，发 /session 查看；下一条消息继续该会话的历史上下文。）`)
+    await ctx.sendToChat(chatId, '已切回。')
     return
   }
   if (outcome.reason === 'busy') {
-    await ctx.sendToChat(chatId, '当前正在生成回复，请先 /stop 再切换会话。')
+    await ctx.sendToChat(chatId, '还在回复中。')
     return
   }
   if (outcome.reason === 'not-switchable') {
-    await ctx.sendToChat(chatId, '❌ 该序号对应的会话不在当前会话的可切回列表中。发 /session 重新查看。')
+    await ctx.sendToChat(chatId, '这个序号不能切回。')
     return
   }
   if (outcome.reason === 'broken') {
-    await ctx.sendToChat(chatId, '❌ 该历史会话已损坏，无法切回。\n发 /session 查看其他可切回会话。')
+    await ctx.sendToChat(chatId, '这个会话打不开。')
     return
   }
-  await ctx.sendToChat(chatId, '❌ 切回历史会话失败：' + outcome.message + '\n已回退：下一条消息将开启全新会话，原会话仍保留在 /session 列表中。')
+  await ctx.sendToChat(chatId, '切回失败。')
 }
 
-/** 时间戳格式（/session 列表的建立/退休时间）。 */
-function formatTimestamp(ts: number): string {
-  const d = new Date(ts)
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes())
-}
-
-/** /compact：把宿主的上下文压缩命令转发到当前会话的 agent。 */
+/**
+ * /compact：把宿主的上下文压缩命令转发到当前会话的 agent。只回报执行结果
+ * （已压缩 / 压缩失败），不转发宿主的 result.text。
+ *
+ * Args:
+ *   ctx (CommandContext): 桥接能力。
+ *   chatId (ChatId): 命令到达的会话。
+ *
+ * Returns:
+ *   Promise<void>: 无。
+ *
+ * Callers:
+ *   - `COMMANDS`（/compact）。
+ */
 async function handleCompactCommand(ctx: CommandContext, chatId: ChatId): Promise<void> {
   const chat = ctx.getChat(chatId)
-  if (chat === undefined) {
-    await ctx.sendToChat(chatId, '请先发一条消息建立会话，再 /compact。')
-    return
-  }
   const commands = ctx.commands
-  if (commands === undefined) {
-    await ctx.sendToChat(chatId, '❌ 宿主未提供 commands 服务，无法压缩上下文。')
-    return
-  }
+  if (chat === undefined || commands === undefined) return
   try {
     // 宿主命令运行时无条件读取 attachments.length 与 signal.aborted。
-    const result = unwrapCommandResult(await commands.execute(chat.agent as never, '/compact', [], new AbortController().signal))
-    const text = result?.text !== undefined && result.text !== '' ? result.text : '✅ 已压缩上下文。'
-    await ctx.sendToChat(chatId, text)
+    await commands.execute(chat.agent as never, '/compact', [], new AbortController().signal)
     ctx.log('info', 'host compact command for ' + chatId)
+    await ctx.sendToChat(chatId, '已压缩。')
   } catch (error) {
     ctx.log('warn', 'host compact command failed: ' + describeError(error))
-    await ctx.sendToChat(chatId, '❌ 上下文压缩失败：' + describeError(error))
+    await ctx.sendToChat(chatId, '压缩失败。')
   }
-}
-
-/** 宿主的命令结果包装（新宿主为 `{ commandId, result }`，旧宿主为扁平对象）。 */
-function unwrapCommandResult(
-  executed: { kind?: string; text?: string; result?: { kind?: string; text?: string } } | undefined,
-): { kind?: string; text?: string } | undefined {
-  if (executed === undefined) return undefined
-  return 'result' in executed ? executed.result : executed
 }
 
 /** 部署默认模型（没有活跃会话时 /model 的展示值）。 */

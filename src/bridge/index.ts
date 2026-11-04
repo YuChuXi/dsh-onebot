@@ -53,15 +53,6 @@ const CHANNEL_SKILL_DIR = fileURLToPath(new URL('../../assets/qq-chat/', import.
 /** 渠道技能名。 */
 const CHANNEL_SKILL_NAME = 'qq-chat'
 
-/** T2 (P1): the queue notice sent to a chat when a message arrives while its
- * task is running under the default 'queue' policy — at most ONE per running
- * turn (the flag resets at turn/end) so a burst of queued messages never
- * spams the chat. Exported for the deterministic text wait in tests. */
-export const QUEUE_NOTICE_TEXT = '⏳ 当前任务运行中，新消息已排队，将在当前任务结束后依次处理。'
-
-/** 插话成功提示：自动插话与语音转写共用同一句。 */
-export const STEER_ACCEPTED_NOTICE = '✅ 已作为补充指令提交给当前任务，模型将在下一步读取。'
-
 /**
  * Bridge between OneBot events and dsh agents. Create via the constructor and
  * call start() from the plugin's effect; call stop() on disposal.
@@ -98,10 +89,6 @@ export class ChatBridge {
    * agent reply even with tracing off). Cleared by a real dispatch to the
    * chat or when the chat is removed. */
   private readonly injectRoundByChat = new Map<ChatId, string>()
-  /** T2 (P1): chats that already got the QUEUE_NOTICE_TEXT for their current
-   * running turn (one notice per turn; cleared at turn/end and on chat
-   * removal — bounded by the chat population). */
-  private readonly queueNoticeChats = new Set<ChatId>()
   /** Plugin version + git commit, read once for /ver. */
   private pluginVersion: string | undefined
   private pluginCommit: string | undefined
@@ -127,7 +114,6 @@ export class ChatBridge {
         this.deps.config.inject?.clearChat(chat.chatId)
         this.traceByChat.delete(chat.chatId)
         this.injectRoundByChat.delete(chat.chatId)
-        this.queueNoticeChats.delete(chat.chatId)
       },
       installChannelScope: (agentCtx, chatId) => this.installChannelScope(agentCtx, chatId),
     })
@@ -595,12 +581,10 @@ export class ChatBridge {
    *   idle traffic);
    * - 插话开关打开（steerEnabled）且发送者具备资格（steerAllMembers，缺省仅管理员），
    *   受限成员还须 steerAllowRestricted 未关 → 消息经 steerMessage 内核提交进
-   *   运行中的回合（在最近 step 边界被读取，不新开回合）；steerNotice 未关时
-   *   回一句提交提示；
+   *   运行中的回合（在最近 step 边界被读取，不新开回合），不发送任何回执；
    * - otherwise（插话关闭 / 不具备资格 / 受限成员且该项已关）→ the dispatch
    *   path (agent.followup queues it as the next turn: consumed after the current
-   *   turn ends, in arrival order) plus the queue notice at most once per
-   *   running turn.
+   *   turn ends, in arrival order)，不发送任何排队提示。
    * 消息形态不再限制插话：进入这里的 text 已是完整载荷（带图/语音/引用的消息
    * 在入站管线里已完成媒体归一化与引用展开），插话只是把它塞进运行中的回合。
    * The running check reads the agent's own lifecycle state — the same
@@ -623,23 +607,10 @@ export class ChatBridge {
     if (steerOn && autoSteerAllowed && (!restricted || steerAllowRestricted)) {
       this.steerMessage(chatId, text)
       currentTrace()?.emit('dispatch', { ok: true, reason: TRACE_REASONS.busyTurnSteered })
-      if (cfg.steerNotice !== false) {
-        this.sendToChat(chatId, STEER_ACCEPTED_NOTICE).catch((error: unknown) => {
-          this.deps.log('debug', '插话提交提示发送失败: ' + describeError(error))
-          currentTrace()?.emit('notice', { ok: false, reason: '插话提交提示发送失败: ' + describeError(error) })
-        })
-      }
       return true
     }
     await this.dispatchFollowup(chatId, text, role, nickname)
     currentTrace()?.emit('dispatch', { ok: true, reason: TRACE_REASONS.busyTurnQueued })
-    if (!this.queueNoticeChats.has(chatId)) {
-      this.queueNoticeChats.add(chatId)
-      this.sendToChat(chatId, QUEUE_NOTICE_TEXT).catch((error: unknown) => {
-        this.deps.log('debug', '排队提示发送失败: ' + describeError(error))
-        currentTrace()?.emit('notice', { ok: false, reason: '排队提示发送失败: ' + describeError(error) })
-      })
-    }
     return true
   }
 
@@ -717,7 +688,8 @@ export class ChatBridge {
           void this.healSessionCollision(chatId)
         }
         if (this.deps.config.sendErrorNotice) {
-          this.sendToChat(chatId, '⚠️ 运行出错：' + message, { queuable: true }).catch((error: unknown) => {
+          this.deps.log('warn', 'turn failed for ' + chatId + ': ' + message)
+          this.sendToChat(chatId, '运行出错。', { queuable: true }).catch((error: unknown) => {
             this.deps.log('debug', '错误通知发送失败: ' + describeError(error))
             trace?.emit('notice', { ok: false, reason: TRACE_REASONS.noticeErrorSendFailed })
           })
@@ -726,9 +698,6 @@ export class ChatBridge {
       this.stopTyping(chat)
       chat.lastActivityAt = Date.now()
       chat.busy = false
-      // T2 (P1): the turn that armed the queue notice is over — a later
-      // running turn notifies again.
-      this.queueNoticeChats.delete(chatId)
       this.deps.log('info', 'turn/end for ' + chatId + ': ' + event.data.reason.kind)
       // Durable: flush the session so a later restart can resume it.
       void this.deps.sessions.flush(chat.agent.session).catch((error: unknown) => {
@@ -789,7 +758,7 @@ export class ChatBridge {
    */
   private async resetChat(chatId: ChatId): Promise<void> {
     await this.registry.resetChat(chatId)
-    this.sendToChat(chatId, '✅ 已开启新会话，下一条消息将进入全新会话，旧对话历史保留在之前的会话中。').catch((error: unknown) => {
+    this.sendToChat(chatId, '已开启新会话。').catch((error: unknown) => {
       this.deps.log('warn', 'reset notice send failed: ' + String(error))
     })
   }

@@ -123,33 +123,21 @@ export function sessionPreviewFromEvents(events: readonly SessionPreviewEvent[],
   return fallback === '' ? '' : truncatePreview(fallback, maxLength)
 }
 
-/** Shorten a session id for the one-line list while keeping BOTH ends: every
- * onebot id shares the `onebot-…` head, so head-only truncation (e.g. the
- * first 12 characters) would render every entry of a chat identically — the
- * unique tail must survive for the id to stay recognizable. */
-export function shortSessionId(id: string): string {
-  if (id.length <= 20) return id
-  return id.slice(0, 8) + '…' + id.slice(-8)
-}
-
 /** Cold-read one retired session's preview through the persistence port:
  * open a 'read' handle (never takes write ownership, works beside a live
- * writer), take the header's createdAt plus a small event prefix, then close
- * the handle — always, even when the read failed (AsyncDisposable: a leaked
- * handle pins backend resources). Returns undefined when the log is missing,
- * unreadable or corrupt; the caller renders 「（内容不可读）」 and neither
- * the rest of the list nor the switch-back flow is affected. */
-export async function sessionPreviewFor(ctx: PreviewContext, sessionId: string): Promise<{ createdAt: number | undefined; text: string } | undefined> {
+ * writer), read a small event prefix, then close the handle — always, even
+ * when the read failed (AsyncDisposable: a leaked handle pins backend
+ * resources). Returns undefined when the log is missing, unreadable or
+ * corrupt; the caller renders 「（内容不可读）」 and neither the rest of the
+ * list nor the switch-back flow is affected. */
+export async function sessionPreviewFor(ctx: PreviewContext, sessionId: string): Promise<string | undefined> {
   const persistence = ctx.sessionPersistence
-  if (persistence === undefined) return { createdAt: undefined, text: '' }
+  if (persistence === undefined) return ''
   let handle: SessionReadHandleLike | undefined
   try {
     handle = await persistence.open(makeSessionId(sessionId), 'read')
     const prefix = await handle.read(0, SESSION_PREVIEW_EVENT_PREFIX)
-    const createdAt = typeof handle.header?.createdAt === 'number' && Number.isFinite(handle.header.createdAt) && handle.header.createdAt > 0
-      ? handle.header.createdAt
-      : undefined
-    return { createdAt, text: sessionPreviewFromEvents(prefix.events) }
+    return sessionPreviewFromEvents(prefix.events)
   } catch (error) {
     ctx.log('warn', 'session preview read failed for ' + sessionId + ' (the list still renders): ' + describeError(error))
     return undefined

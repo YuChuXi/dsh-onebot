@@ -85,13 +85,13 @@ describe('commands', () => {
     })
     h.sendText('/model deepseek deepseek-reasoner')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('已切换当前会话模型：deepseek/deepseek-reasoner'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('已切换。'))).toBe(true)
     })
     expect(chat.agent.model.current()).toMatchObject({ provider: 'deepseek', model: 'deepseek-reasoner' })
     expect(saveSelection).not.toHaveBeenCalled()
     h.sendText('/model deepseek no-such-model')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('没有模型 no-such-model'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('没有这个模型'))).toBe(true)
     })
     h.client.close()
     await h.bridge.stop()
@@ -111,7 +111,7 @@ describe('commands', () => {
     const chat = (h.bridge as unknown as { chats: Map<string, { agent: { model: { current: () => { provider: string; model: string } | undefined } } }> }).chats.get('private:10001')!
     h.sendText('/model --default deepseek deepseek-reasoner')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('已修改部署默认模型：deepseek/deepseek-reasoner'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('已设为默认。'))).toBe(true)
     })
     expect(saveSelection).toHaveBeenCalledWith({ provider: 'deepseek', model: 'deepseek-reasoner' })
     expect(chat.agent.model.current()).toMatchObject({ provider: 'deepseek', model: 'deepseek-chat' })
@@ -120,7 +120,7 @@ describe('commands', () => {
     await h.connection.stop()
   }, 60_000)
 
-  it('/compact forwards the host command with the 4-arg execute signature and relays its text', async () => {
+  it('/compact forwards the host command with the 4-arg execute signature and replies only the outcome', async () => {
     const execute = vi.fn(async () => ({
       commandId: 'c1',
       result: { kind: 'success', text: '已压缩 12 条历史' },
@@ -129,14 +129,17 @@ describe('commands', () => {
     h.sendText('你好')
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
     h.sendText('/compact')
-    await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('已压缩 12 条历史'))).toBe(true)
-    })
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1))
     const call = execute.mock.calls[0] as unknown[] | undefined
     expect(call).toBeDefined()
     expect(call![1]).toBe('/compact')
     expect(call![2]).toEqual([])
     expect((call![3] as { aborted: boolean }).aborted).toBe(false)
+    // 执行类回执只报结果；宿主的 result.text 不转发。
+    await vi.waitFor(() => {
+      expect(h.outbound.some(f => f.action === 'send_msg' && JSON.stringify(f.params).includes('已压缩。'))).toBe(true)
+    })
+    expect(h.outbound.some(f => JSON.stringify(f.params).includes('已压缩 12 条历史'))).toBe(false)
     h.client.close()
     await h.bridge.stop()
     await h.connection.stop()

@@ -120,7 +120,7 @@ DSH_ROOT=<fnOS 应用数据目录>/node_modules ./scripts/build.sh
         adminUsers: ['你的QQ号']   # 必配：至少一个管理员，否则私聊/斜杠命令不可用
 ```
 
-> ⚠️ **首次配置必须设置至少一个管理员**（`adminUsers` 或环境变量 `ONEBOT_ALLOWED_USERS`）：
+> **首次配置必须设置至少一个管理员**（`adminUsers` 或环境变量 `ONEBOT_ALLOWED_USERS`）：
 > `dmPolicy: open`（默认）只允许管理员私聊，斜杠命令也仅管理员可用；不设置则无人能对话。
 > 开发调试可临时 `allowAllUsers: true`（或 `ONEBOT_ALLOW_ALL_USERS=true`）放行所有用户。
 
@@ -169,15 +169,14 @@ WS 连接、图片下载、文件解析都依赖这条网络通路；NapCat 与 
 | `injectEnabled` | `false` | 事件注入通道（W1，**仅调试用**）：开启后按 `injectIntervalMs` 轮询 `mediaDir/qq-inject.jsonl`，把新行（每行一个 OneBot 消息事件 JSON）喂进**真实入站管线**（trace 事件标 `stage=inject`）；启动时已存在的历史行跳过并记一条说明。信任边界：注入是调试通道，默认全关，勿在生产开启 |
 | `injectDryRun` | `true` | 注入干跑（W1，**强烈建议保持 `true`**）：注入回合触发的全部出站写操作（发消息/撤回等，**含异步模型回合的最终回复**——拦截点在出站动作层）被拦截计数、原文进 trace 事件、绝不真发 QQ；真实消息到达同一会话立即解除拦截（不连坐真人）；`false` = 注入内容会真实发送，仅限隔离环境实验 |
 | `injectIntervalMs` | `2000` | 注入队列轮询间隔（毫秒，W1；最小 500） |
-| `steerEnabled` | `false` | 任务运行中收到新消息的处理策略（插话开关）：开=把新消息作为补充指令插进当前回合（模型在下一步读取），任意消息形态（文字/图片/文件/语音/带引用/合并转发）一视同仁；关（默认）=排队到当前任务结束后的后续回合，等待期间每运行回合至多回复一次排队提示。无运行中任务时不受本项影响。设置页 behavior 组可改，热重启生效 |
-| `steerAllMembers` | `false` | 插话资格（插话开关打开时生效）：开=所有成员都能插话；关（默认）=仅管理员。不具备资格的消息按排队处理（入队+排队提示）。设置页 behavior 组可改，热重启生效 |
+| `steerEnabled` | `false` | 任务运行中收到新消息的处理策略（插话开关）：开=把新消息作为补充指令插进当前回合（模型在下一步读取），任意消息形态（文字/图片/文件/语音/带引用/合并转发）一视同仁；关（默认）=排队到当前任务结束后的后续回合。两条路径都不发提示。无运行中任务时不受本项影响。设置页 behavior 组可改，热重启生效 |
+| `steerAllMembers` | `false` | 插话资格（插话开关打开时生效）：开=所有成员都能插话；关（默认）=仅管理员。不具备资格的消息按排队处理。设置页 behavior 组可改，热重启生效 |
 | `steerAllowRestricted` | `true` | 受限成员插话（插话开关打开时生效）：开（默认）=群内受限成员（非管理员且 `restrictedMemberPrefix` 开）也能插话；关=受限成员始终排队。设置页 behavior 组可改，热重启生效 |
-| `steerNotice` | `true` | 插话提示：插话成功时回一句「已作为补充指令提交给当前任务」；关=静默插话。设置页 behavior 组可改，热重启生效 |
 | `thinkingPrivate` | `default` | 私聊新建会话的思考强度；`default` = 跟随部署默认。设置页为下拉，选项由所选私聊模型的能力决定；切换模型时下拉会即时重算 |
 | `thinkingGroup` | `default` | 群聊新建会话的思考强度，规则同 `thinkingPrivate` |
 | `modelPrivate` | `''` | 私聊使用的模型，`<provider>/<model>`；留空 = 跟随部署默认。设置页「私聊」块用两级下拉选择（provider → model），选项来自宿主模型目录 |
 | `modelGroup` | `''` | 群聊使用的模型，`<provider>/<model>`；留空 = 跟随部署默认。规则同 `modelPrivate` |
-| `sendErrorNotice` | `true` | 一轮运行出错时向用户发送 ⚠️ 错误提示 |
+| `sendErrorNotice` | `true` | 一轮运行出错时向用户发送错误提示 |
 | `outboundIntervalBaseMs` | `300` | 同一会话相邻两条出站消息的固定间隔（毫秒） |
 | `outboundIntervalPerCharMs` | `60` | 每条消息按字数追加的间隔（毫秒/字） |
 | `outboundIntervalJitterPct` | `30` | 在计算出的间隔上叠加的随机抖动比例（0–100，实际为 ±该百分比） |
@@ -186,7 +185,7 @@ WS 连接、图片下载、文件解析都依赖这条网络通路；NapCat 与 
 | `restrictedMemberPrefix` | `true` | 群聊非管理员消息注入 `[受限用户:仅问答]` 前缀（软限制） |
 | `adminUsers` | `[]` | 管理员 QQ；也可用 `ONEBOT_ALLOWED_USERS` 环境变量。**必须至少设置一个**，否则私聊（dmPolicy=open）与斜杠命令无人可用 |
 | `allowFrom` / `groupAllowFrom` | `[]` | 白名单用户/群 |
-| `sendErrorNotice` | `true` | 一轮运行出错时向用户发送 ⚠️ 错误提示 |
+| `sendErrorNotice` | `true` | 一轮运行出错时向用户发送错误提示 |
 | `sttEnabled` | `true` | 语音转写（需 ffmpeg + whisper CLI） |
 | `sttEngine` | `auto` | STT 引擎：`auto`(自动探测 whisper-cli/whisper/mlx_whisper)/`openai`/`whisper-cpp`/`custom` |
 | `sttModel` | `small` | whisper 模型 |
@@ -205,7 +204,7 @@ WS 连接、图片下载、文件解析都依赖这条网络通路；NapCat 与 
 | `workspacePath` | 空 | 会话挂载的工作区（留空=宿主进程 cwd；未配置时插件启动会 warn 一次建议显式配置——宿主未提供可编程查询的默认工作区）。per-chat 覆盖随映射文件持久化，重启不丢 |
 | `chatIdleEvictDays` | `7` | 会话空闲淘汰天数：chat 超过该天数无任何活动时，在下一条入站消息处理前清理其内存态 agent（会话先 flush 落盘、映射保留，同一 chat 之后再发消息可 resume 恢复原会话）；`0` = 禁用 |
 
-> ⚠️ **BREAKING（M0 安全加固）**：reverse 模式下 `accessToken` 留空会拒绝启动（fail-closed）；`host` 默认从 `0.0.0.0` 改为 `127.0.0.1`（仅本机监听），跨机部署需显式配置 `host: 0.0.0.0`。
+> **BREAKING（M0 安全加固）**：reverse 模式下 `accessToken` 留空会拒绝启动（fail-closed）；`host` 默认从 `0.0.0.0` 改为 `127.0.0.1`（仅本机监听），跨机部署需显式配置 `host: 0.0.0.0`。
 
 环境变量：`ONEBOT_ALLOWED_USERS`（逗号分隔管理员）、`ONEBOT_ALLOW_ALL_USERS=true`（开发用）。
 
@@ -240,7 +239,7 @@ dsh Web GUI 的设置页提供本插件的可视化配置（host-plane Remote `o
 | private（私聊） | `modelPrivate`、`thinkingPrivate`、`extraPromptPrivate`、`dmPolicy`、`allowFrom` |
 | group（群聊） | `modelGroup`、`thinkingGroup`、`extraPromptGroup`、`requireMention`、`groupPolicy`、`groupAllowFrom` |
 | permissions（权限） | `adminUsers`、`allowAllUsers` |
-| behavior（行为） | `sendErrorNotice`、`outboundIntervalBaseMs`、`outboundIntervalPerCharMs`、`outboundIntervalJitterPct`、`recentMessages`、`steerEnabled`、`steerAllMembers`、`steerAllowRestricted`、`steerNotice`、`sleepMode`、`sleepStart`、`sleepEnd` |
+| behavior（行为） | `sendErrorNotice`、`outboundIntervalBaseMs`、`outboundIntervalPerCharMs`、`outboundIntervalJitterPct`、`recentMessages`、`steerEnabled`、`steerAllMembers`、`steerAllowRestricted`、`sleepMode`、`sleepStart`、`sleepEnd` |
 | diagnostics（诊断） | `traceEnabled`、`recordInbound`、`inboxRedact`、`injectEnabled`、`injectDryRun` |
 
 `accessToken` 在设置页做密码型输入，快照返回侧脱敏（不回显明文）；写入侧仍在 patch 文件明文落盘。

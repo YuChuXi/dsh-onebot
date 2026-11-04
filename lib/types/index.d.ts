@@ -111,8 +111,6 @@ export interface Config {
     steerAllMembers: boolean;
     /** 受限成员插话：开（默认）=群内非管理员的成员也能插话；关=受限成员始终排队。 */
     steerAllowRestricted: boolean;
-    /** 插话提示：开（默认）=插话成功回一句提交提示；关=静默插话。 */
-    steerNotice: boolean;
     dmPolicy: 'open' | 'allowlist' | 'disabled';
     groupPolicy: 'open' | 'allowlist' | 'disabled';
     allowFrom: string[];

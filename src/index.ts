@@ -109,8 +109,6 @@ export interface Config {
   steerAllMembers: boolean
   /** 受限成员插话：开（默认）=群内非管理员的成员也能插话；关=受限成员始终排队。 */
   steerAllowRestricted: boolean
-  /** 插话提示：开（默认）=插话成功回一句提交提示；关=静默插话。 */
-  steerNotice: boolean
   dmPolicy: 'open' | 'allowlist' | 'disabled'
   groupPolicy: 'open' | 'allowlist' | 'disabled'
   allowFrom: string[]
@@ -222,8 +220,6 @@ export const Config: Z<Config> = z.object({
     .description('插话资格（设置面板复选框）：开=所有成员都能插话；关（默认）=仅管理员'),
   steerAllowRestricted: z.boolean().default(true)
     .description('受限成员插话（设置面板复选框）：开（默认）=群内受限成员也能插话；关=受限成员始终排队。只在插话开关打开时生效'),
-  steerNotice: z.boolean().default(true)
-    .description('插话提示（设置面板复选框）：插话成功时回一句「已作为补充指令提交给当前任务」；关=静默插话'),
   dmPolicy: z.union([z.const('open'), z.const('allowlist'), z.const('disabled')]).default('open')
     .description('私聊策略：open=仅管理员；allowlist=仅 allowFrom；disabled=拒绝所有私聊'),
   groupPolicy: z.union([z.const('open'), z.const('allowlist'), z.const('disabled')]).default('open')
@@ -239,7 +235,7 @@ export const Config: Z<Config> = z.object({
   ignoreSelf: z.boolean().default(true)
     .description('忽略机器人自己发出的消息（防自循环）'),
   sendErrorNotice: z.boolean().default(true)
-    .description('一轮运行出错时向用户发送 ⚠️ 错误提示'),
+    .description('一轮运行出错时向用户发送错误提示'),
   outboundIntervalBaseMs: z.number().min(0).default(300)
     .description('出站节流：同一会话相邻两条消息的基础间隔（毫秒）'),
   outboundIntervalPerCharMs: z.number().min(0).default(60)
@@ -467,7 +463,6 @@ export function apply(ctx: Context, config: Config): void {
       steerEnabled: config.steerEnabled,
       steerAllMembers: config.steerAllMembers,
       steerAllowRestricted: config.steerAllowRestricted,
-      steerNotice: config.steerNotice,
       sendErrorNotice: config.sendErrorNotice,
       outboundIntervalBaseMs: config.outboundIntervalBaseMs,
       outboundIntervalPerCharMs: config.outboundIntervalPerCharMs,

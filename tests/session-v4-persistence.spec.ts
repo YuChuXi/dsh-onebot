@@ -236,9 +236,11 @@ describe('session v4 producer-owned source kind（持久化回归）', () => {
 
       h.sendText('/compact')
       await vi.waitFor(() => expect(execute).toHaveBeenCalledWith(expect.anything(), '/compact', expect.anything(), expect.anything()))
+      // 执行类回执只报结果；宿主的 result.text 不转发。
       await vi.waitFor(() => {
-        expect(h.outbound.some(f => f.action === 'send_msg' && JSON.stringify(f.params).includes('已压缩 12 条历史'))).toBe(true)
+        expect(h.outbound.some(f => f.action === 'send_msg' && JSON.stringify(f.params).includes('已压缩。'))).toBe(true)
       })
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('已压缩 12 条历史'))).toBe(false)
       // 宿主转发路径：commands.execute(chat.agent, …) 由宿主命令运行时写行（宿主自有
       // source）；插件侧 followup/steer 均未被触发 —— 零插件会话写入。
       expect(h.captured).toHaveLength(0)

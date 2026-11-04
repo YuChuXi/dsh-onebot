@@ -8,7 +8,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
-import { SESSION_PREVIEW_MAX_CHARS, sessionPreviewFromEvents, shortSessionId, truncatePreview } from '../src/commands/preview.js'
+import { SESSION_PREVIEW_MAX_CHARS, sessionPreviewFromEvents, truncatePreview } from '../src/commands/preview.js'
 import type { SessionPreviewEvent } from '../src/bridge/config.js'
 import { makeCmdHarness, makeEvent } from './helpers/bridge-harness.js'
 
@@ -161,22 +161,10 @@ describe('preview extraction (pure functions)', () => {
     ])
     expect(preview).toBe('多块存储的正文')
   })
-
-  it('shortens long ids keeping both ends, and stays verbatim for short ones', () => {
-    expect(shortSessionId('onebot-private-10001')).toBe('onebot-private-10001')
-    const long = 'onebot-private-841859784-m8xk2f9'
-    const short = shortSessionId(long)
-    expect(short).toHaveLength(17)
-    expect(short.startsWith('onebot-p')).toBe(true)
-    expect(short.endsWith('m8xk2f9')).toBe(true)
-    // Within one chat's list the shared head must not make entries identical.
-    const list = ['onebot-private-841859784', 'onebot-private-841859784-aaa', 'onebot-private-841859784-bbb'].map(shortSessionId)
-    expect(new Set(list).size).toBe(3)
-  })
 })
 
 describe('/session list previews (command e2e)', () => {
-  it('renders preview + creation + retire time + shortened id, keeps full-id payloads, and closes every handle', async () => {
+  it('renders preview only, keeps full-id payloads, and closes every handle', async () => {
     const handles: Record<string, { events?: SessionEvent[]; createdAt?: number }> = {}
     const fake = fakePersistence(handles)
     const h = await makeCmdHarness({ sessionPersistence: fake.stub })
@@ -207,12 +195,12 @@ describe('/session list previews (command e2e)', () => {
     h.sendText('/session')
     await vi.waitFor(() => {
       const text = h.outbound.map(f => JSON.stringify(f.params)).join('\n')
-      expect(text).toContain('可切回历史会话：')
-      // Newest first; each item: preview（createdAt 建立 · retiredAt 退休 · id）
-      expect(text).toContain('1. 第二条 配置语音转写（2026-09-13 11:05 建立 · ')
-      expect(text).toContain('2. 第一条 修复登录页报错（2026-09-13 10:20 建立 · ')
-      expect(text).toContain(' 退休 · ' + shortSessionId(s2) + '）')
-      expect(text).toContain(' 退休 · ' + shortSessionId(s1) + '）')
+      expect(text).toContain('可切回的会话：')
+      // Newest first; each item is just the preview text — no id/time details.
+      expect(text).toContain('1. 第二条 配置语音转写')
+      expect(text).toContain('2. 第一条 修复登录页报错')
+      expect(text).not.toContain(' 建立 ')
+      expect(text).not.toContain(' 退休 ')
     })
     // The switch-back snapshot still carries the FULL session ids as payloads.
     const pending = (h.bridge as unknown as { registry: { getSettings(chatId: string): { pendingSelection?: { kind: string; items: Array<{ label: string; payload: string }> } } } })
@@ -254,8 +242,8 @@ describe('/session list previews (command e2e)', () => {
     await vi.waitFor(() => {
       const text = h.outbound.map(f => JSON.stringify(f.params)).join('\n')
       // Item 2 (s1, oldest) degrades; item 1 (s2) still shows its preview.
-      expect(text).toContain('2. （内容不可读）（')
-      expect(text).toContain('1. 第二条（2026-09-13 11:05 建立 · ')
+      expect(text).toContain('2. （内容不可读）')
+      expect(text).toContain('1. 第二条')
       expect(text).toContain('回复 /session <序号> 切回')
     })
     const pending = (h.bridge as unknown as { registry: { getSettings(chatId: string): { pendingSelection?: { kind: string; items: Array<{ payload: string }> } } } })
@@ -266,7 +254,7 @@ describe('/session list previews (command e2e)', () => {
     await h.connection.stop()
   }, 60_000)
 
-  it('a read failure and a failing close still render the list; a header without createdAt omits 建立', async () => {
+  it('a read failure and a failing close still render the list', async () => {
     const fake = fakePersistence({})
     // Break s1 at READ time (open succeeds) and make the teardown close fail
     // too — neither may surface as a command failure.
@@ -284,7 +272,7 @@ describe('/session list previews (command e2e)', () => {
     h.sendText('/session')
     await vi.waitFor(() => {
       const text = h.outbound.map(f => JSON.stringify(f.params)).join('\n')
-      expect(text).toContain('1. （内容不可读）（')
+      expect(text).toContain('1. （内容不可读）')
       expect(text).not.toContain(' 建立 ')
       expect(text).toContain('回复 /session <序号> 切回')
     })

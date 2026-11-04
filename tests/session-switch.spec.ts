@@ -20,7 +20,6 @@ import type { RegistryDeps } from '../src/registry/index.js'
 import type { BridgeConfig } from '../src/bridge/index.js'
 import { MediaStore } from '../src/media/store.js'
 import { Transcriber } from '../src/media/stt.js'
-import { shortSessionId } from '../src/commands/preview.js'
 
 import { makeCmdHarness, makeEvent, makeHarness } from './helpers/bridge-harness.js'
 
@@ -349,11 +348,11 @@ describe('/session command (bridge harness)', () => {
     })
     h.sendText('/session')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('可切回历史会话'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('可切回的会话'))).toBe(true)
     })
     h.sendText('/session 1')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('已切回历史会话'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('已切回'))).toBe(true)
     })
 
     // The switch went through agents.resume with the ORIGINAL id…
@@ -384,11 +383,11 @@ describe('/session command (bridge harness)', () => {
     })
     h.sendText('/session')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('可切回历史会话'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('可切回的会话'))).toBe(true)
     })
     h.sendText('/session 1')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('已切回历史会话'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('已切回'))).toBe(true)
     })
     h.client.close()
     await h.bridge.stop()
@@ -408,12 +407,12 @@ describe('/session command (bridge harness)', () => {
     await bridge2.stop()
   }, 30_000)
 
-  it('bare form renders the numbered list with retire time and sets the session snapshot; out of range keeps it; non-numeric gets usage', async () => {
+  it('bare form renders the numbered list and sets the session snapshot; out of range keeps it; non-numeric gets usage', async () => {
     const h = await makeCmdHarness()
     // No switchable history yet (and no live chat): the friendly empty reply.
     h.sendText('/session')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('没有可切回的历史会话'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('没有可切回的会话'))).toBe(true)
     })
     expect(registryOf(h).getSettings('private:10001').pendingSelection).toBeUndefined()
 
@@ -428,13 +427,12 @@ describe('/session command (bridge harness)', () => {
     h.sendText('/session')
     await vi.waitFor(() => {
       const text = h.outbound.map(f => JSON.stringify(f.params)).join('\n')
-      expect(text).toContain('可切回历史会话：')
+      expect(text).toContain('可切回的会话：')
       // Preview degradation: this harness has no persistence service, so the
-      // item renders the no-content placeholder and omits the creation time;
-      // the id (≤20 chars) stays verbatim after the retire time.
-      expect(text).toContain('1. （无对话内容）（')
-      expect(text).toContain(' 退休 · ' + original + '）')
+      // item renders the no-content placeholder; no id/time details are shown.
+      expect(text).toContain('1. （无对话内容）')
       expect(text).not.toContain(' 建立 ')
+      expect(text).not.toContain(' 退休 ')
       expect(text).toContain('回复 /session <序号> 切回')
     })
     const pending = registryOf(h).getSettings('private:10001').pendingSelection
@@ -443,14 +441,14 @@ describe('/session command (bridge harness)', () => {
 
     h.sendText('/session 9')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('序号越界，请回复 /session 重新查看列表'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('没有这个序号'))).toBe(true)
     })
     // Deliberately retained for a retry.
     expect(registryOf(h).getSettings('private:10001').pendingSelection?.items).toHaveLength(1)
 
     h.sendText('/session foo')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('用法：/session 查看可切回会话'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('发 /session 看列表'))).toBe(true)
     })
 
     h.client.close()
@@ -476,17 +474,15 @@ describe('/session command (bridge harness)', () => {
     // form rendered (same R2 contract as /model).
     h.sendText('/session')
     await vi.waitFor(() => {
-      // New item format: preview placeholder (this harness has no persistence
-      // service) + retire time + recognizable id.
+      // Preview placeholder only (this harness has no persistence service).
       const text = h.outbound.map(f => JSON.stringify(f.params)).join('\n')
-      expect(text).toContain('1. （无对话内容）（')
-      expect(text).toContain(' 退休 · ' + s1 + '）')
+      expect(text).toContain('1. （无对话内容）')
     })
     h.sendText('/session 1')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('已切回历史会话：' + s1))).toBe(true)
+      expect(String(registryOf(h).chats.get('private:10001')?.sessionId ?? '')).toBe(s1)
     })
-    expect(String(registryOf(h).chats.get('private:10001')!.sessionId)).toBe(s1)
+    expect(h.outbound.some(f => JSON.stringify(f.params).includes('已切回。'))).toBe(true)
     expect(registryOf(h).switchableSessions('private:10001').map(e => e.id)).toEqual([s2])
     h.sendText('第三条')
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(3))
@@ -495,16 +491,13 @@ describe('/session command (bridge harness)', () => {
     // Round trip: /session back to s2.
     h.sendText('/session')
     await vi.waitFor(() => {
-      // New item format: the retired s2 shows as the preview placeholder +
-      // retire time + recognizable id.
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('1. （无对话内容）（'))).toBe(true)
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes(' 退休 · ' + shortSessionId(s2) + '）'))).toBe(true)
+      expect(registryOf(h).getSettings('private:10001').pendingSelection?.items.map(i => i.payload)).toEqual([s2])
     })
     h.sendText('/session 1')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('已切回历史会话：' + s2))).toBe(true)
+      expect(String(registryOf(h).chats.get('private:10001')?.sessionId ?? '')).toBe(s2)
     })
-    expect(String(registryOf(h).chats.get('private:10001')!.sessionId)).toBe(s2)
+    expect(h.outbound.some(f => JSON.stringify(f.params).includes('已切回。'))).toBe(true)
     expect(registryOf(h).switchableSessions('private:10001').map(e => e.id)).toEqual([s1])
 
     h.client.close()
@@ -512,7 +505,7 @@ describe('/session command (bridge harness)', () => {
     await h.connection.stop()
   }, 30_000)
 
-  it('refuses to switch while the chat is busy (提示先 /stop) and keeps the snapshot', async () => {
+  it('refuses to switch while the chat is busy and keeps the snapshot', async () => {
     const h = await makeCmdHarness()
     h.sendText('你好')
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
@@ -525,13 +518,13 @@ describe('/session command (bridge harness)', () => {
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(2))
     h.sendText('/session')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('可切回历史会话'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('可切回的会话'))).toBe(true)
     })
     h.chats().get('private:10001')!.busy = true
     const resumedBefore = (registryOf(h) as unknown as { deps: { agents: { resume: ReturnType<typeof vi.fn> } } }).deps.agents.resume
     h.sendText('/session 1')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('请先 /stop 再切换会话'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('还在回复中'))).toBe(true)
     })
     expect(resumedBefore).not.toHaveBeenCalled()
     // The snapshot was not consumed by the refused attempt.
@@ -541,7 +534,7 @@ describe('/session command (bridge harness)', () => {
     await h.connection.stop()
   }, 60_000)
 
-  it('command-level resume failure: ❌ fallback reply and the next message opens a fresh session', async () => {
+  it('command-level resume failure: fallback reply and the next message opens a fresh session', async () => {
     const h = await makeCmdHarness()
     h.sendText('第一条')
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
@@ -556,11 +549,11 @@ describe('/session command (bridge harness)', () => {
 
     h.sendText('/session')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('可切回历史会话'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('可切回的会话'))).toBe(true)
     })
     h.sendText('/session 1')
     await vi.waitFor(() => {
-      expect(h.outbound.some(f => JSON.stringify(f.params).includes('切回历史会话失败'))).toBe(true)
+      expect(h.outbound.some(f => JSON.stringify(f.params).includes('切回失败'))).toBe(true)
     })
     // The broken target left the list; the previous session is switchable.
     expect(registryOf(h).switchableSessions('private:10001').map(e => e.id)).toEqual([s2])

@@ -77,8 +77,6 @@ export interface BridgeConfig {
     steerAllMembers?: boolean;
     /** 受限成员插话（设置面板复选框）：absent/true = 受限成员也能插话；false = 受限成员始终排队。 */
     steerAllowRestricted?: boolean;
-    /** 插话提示（设置面板复选框）：absent/true = 插话成功回一句提交提示；false = 静默插话。 */
-    steerNotice?: boolean;
 }
 /** Observability ports: the trace sink, the inbound recorder and the inject
  * channel ride as optional members; absent = the feature is off. */

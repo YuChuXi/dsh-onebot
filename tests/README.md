@@ -40,7 +40,7 @@
 | `record-replay.spec.ts` | 入站录制、脱敏、轮转，以及离线回放的真实管线决策摘要 |
 | `inject.spec.ts` | 调试注入通道：历史行跳过、dry-run 拦截、真实消息清除注入轮次 |
 | `session-v4-persistence.spec.ts` | 会话行 `source.kind = plugin:dsh-onebot` 的两个写入点与防漂移扫描 |
-| `session-switch.spec.ts` / `steer-queue.spec.ts` | `/session` 切换、插话四开关与排队策略 |
+| `session-switch.spec.ts` / `steer-queue.spec.ts` | `/session` 切换、插话三开关与排队/插话策略 |
 | `tools-*.spec.ts` / `model.spec.ts` | qq_* 工具族、主动写闸、`qq_model`（按群/私聊指定模型与思考强度） |
 | `connection.spec.ts` / `segments.spec.ts` / `media-*.spec.ts` / `stt-*.spec.ts` | 反向/正向 WS、消息段、媒体围栏与语音转写 |
 

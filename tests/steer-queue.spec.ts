@@ -5,11 +5,10 @@
  * - 排队（默认，steerEnabled 未开）：门控后的新消息保持 0.8.1 的 dispatch 路径 ——
  *   agent.followup 的宿主契约是「Queue an ordinary follow-up turn… becomes
  *   the sole ordinary message of its own turn」（runtime-types.d.ts:189-193），
- *   即入队并在当前回合结束后按到达顺序各自成为独立回合；插件侧新增的是
- *   门控后每运行回合至多 1 条的排队提示（QUEUE_NOTICE_TEXT，turn/end 重置）。
+ *   即入队并在当前回合结束后按到达顺序各自成为独立回合；插件不发任何提示。
  * - 插话（steerEnabled=true）：消息经 bridge 单一 steerMessage 写点
  *   （agent.steer + plugin:dsh-onebot source）作为补充指令进当前任务，在最近
- *   step 边界被读取，不新开回合；steerNotice 未关时每条提交回复一次提交提示。
+ *   step 边界被读取，不新开回合；插件不发任何回执。
  * - 资格：steerAllMembers=false（默认）仅管理员可插话；受限成员是否放行由
  *   steerAllowRestricted 控制（默认放行）。不具备资格的消息走排队行为。
  * - 消息形态不设限：带图/语音/引用的消息在入站管线完成媒体归一化与引用展开
@@ -20,8 +19,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 
-import { QUEUE_NOTICE_TEXT, STEER_ACCEPTED_NOTICE } from '../src/bridge/index.js'
-import { makeCmdHarness, makeEvent, sentTexts } from './helpers/bridge-harness.js'
+import { makeCmdHarness, sentTexts } from './helpers/bridge-harness.js'
 
 /** 把指定 chat 的假 agent 置于运行态（真实宿主中由回合驱动自动切换）。 */
 function setRunning(h: Awaited<ReturnType<typeof makeCmdHarness>>, chatId = 'private:10001'): void {
@@ -31,7 +29,7 @@ function setRunning(h: Awaited<ReturnType<typeof makeCmdHarness>>, chatId = 'pri
 }
 
 describe('排队（默认，steerEnabled 未开）', () => {
-  it('运行回合中收到 2 条新消息：按序入队 dispatch、排队提示恰 1 条、零 steer', async () => {
+  it('运行回合中收到 2 条新消息：按序入队 dispatch、零 steer、零出站提示', async () => {
     const h = await makeCmdHarness() // 不传 steerEnabled = 缺省排队
     h.sendText('启动任务')
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
@@ -47,34 +45,7 @@ describe('排队（默认，steerEnabled 未开）', () => {
     expect(texts[1]).toContain('排队消息一')
     expect(texts[2]).toContain('排队消息二')
     expect(h.captured.steers).toHaveLength(0)
-
-    // 排队提示同一运行回合只发 1 条（防刷屏）
-    await vi.waitFor(() => expect(sentTexts(h.outbound).some(t => t.includes(QUEUE_NOTICE_TEXT))).toBe(true))
-    expect(sentTexts(h.outbound).filter(t => t.includes(QUEUE_NOTICE_TEXT))).toHaveLength(1)
-    expect(sentTexts(h.outbound).filter(t => t.includes(STEER_ACCEPTED_NOTICE))).toHaveLength(0)
-    expect(h.outbound.filter(f => f.action === 'send_msg')).toHaveLength(1) // 除提示外无其他出站
-
-    h.client.close()
-    await h.bridge.stop()
-    await h.connection.stop()
-  }, 60_000)
-
-  it('turn/end 重置提示计数：下一个运行回合再排队会再次提示', async () => {
-    const h = await makeCmdHarness()
-    h.sendText('启动任务')
-    await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
-    setRunning(h)
-    h.sendText('第一条排队')
-    await vi.waitFor(() => expect(sentTexts(h.outbound).some(t => t.includes(QUEUE_NOTICE_TEXT))).toBe(true))
-
-    // 当前回合结束 → 提示计数重置 → 新回合开始
-    const session = { id: h.sessionIds[0] }
-    h.ctx.emit('session/event', session as never, makeEvent('turn/end', { turn: 1, reason: { kind: 'completed' } }))
-    h.ctx.emit('session/event', session as never, makeEvent('turn/start', { turn: 2 }))
-
-    h.sendText('第二条排队')
-    await vi.waitFor(() => expect(h.captured.followups).toHaveLength(3))
-    await vi.waitFor(() => expect(sentTexts(h.outbound).filter(t => t.includes(QUEUE_NOTICE_TEXT))).toHaveLength(2))
+    expect(sentTexts(h.outbound)).toHaveLength(0)
 
     h.client.close()
     await h.bridge.stop()
@@ -83,7 +54,7 @@ describe('排队（默认，steerEnabled 未开）', () => {
 })
 
 describe('插话（steerEnabled=true）', () => {
-  it('运行回合中的消息经 agent.steer 补充进当前任务：不新开回合、每条一条提交提示', async () => {
+  it('运行回合中的消息经 agent.steer 补充进当前任务：不新开回合、无出站提示', async () => {
     const h = await makeCmdHarness({ steerEnabled: true })
     h.sendText('启动任务')
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
@@ -98,29 +69,10 @@ describe('插话（steerEnabled=true）', () => {
     // 不新开回合：followup 只有一条（最初的任务消息）
     expect(h.captured.followups).toHaveLength(1)
 
-    await vi.waitFor(() => expect(sentTexts(h.outbound).filter(t => t.includes(STEER_ACCEPTED_NOTICE))).toHaveLength(1))
-
     h.sendText('补充指令 B')
     await vi.waitFor(() => expect(h.captured.steers).toHaveLength(2))
     expect(h.captured.steers[1].text).toContain('补充指令 B')
-    await vi.waitFor(() => expect(sentTexts(h.outbound).filter(t => t.includes(STEER_ACCEPTED_NOTICE))).toHaveLength(2))
-    // steer 路径不产生排队提示
-    expect(sentTexts(h.outbound).filter(t => t.includes(QUEUE_NOTICE_TEXT))).toHaveLength(0)
-
-    h.client.close()
-    await h.bridge.stop()
-    await h.connection.stop()
-  }, 60_000)
-
-  it('steerNotice=false：插话照常提交但静默，不回执也不排队提示', async () => {
-    const h = await makeCmdHarness({ steerEnabled: true, steerNotice: false })
-    h.sendText('启动任务')
-    await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
-    setRunning(h)
-
-    h.sendText('静默补充')
-    await vi.waitFor(() => expect(h.captured.steers).toHaveLength(1))
-    await vi.waitFor(() => expect(sentTexts(h.outbound)).toHaveLength(0))
+    expect(sentTexts(h.outbound)).toHaveLength(0)
 
     h.client.close()
     await h.bridge.stop()
@@ -133,7 +85,6 @@ describe('插话（steerEnabled=true）', () => {
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
     expect(h.captured.followups[0].text).toContain('普通消息')
     expect(h.captured.steers).toHaveLength(0)
-    // 零出站提示（不炸不静默之外无任何附加消息）
     expect(sentTexts(h.outbound)).toHaveLength(0)
 
     h.client.close()
@@ -156,8 +107,7 @@ describe('插话（steerEnabled=true）', () => {
     await vi.waitFor(() => expect(h.captured.steers).toHaveLength(1))
     expect(h.captured.steers[0].text).toContain('针对引用的补充')
     expect(h.captured.followups).toHaveLength(1)
-    await vi.waitFor(() => expect(sentTexts(h.outbound).filter(t => t.includes(STEER_ACCEPTED_NOTICE))).toHaveLength(1))
-    expect(sentTexts(h.outbound).filter(t => t.includes(QUEUE_NOTICE_TEXT))).toHaveLength(0)
+    expect(sentTexts(h.outbound)).toHaveLength(0)
 
     h.client.close()
     await h.bridge.stop()
@@ -189,7 +139,7 @@ describe('插话（steerEnabled=true）', () => {
 })
 
 describe('插话资格（steerAllMembers / steerAllowRestricted）', () => {
-  it('缺省仅管理员：普通群成员的纯文字不自动插话，按排队处理（入队+排队提示）', async () => {
+  it('缺省仅管理员：普通群成员的消息不自动插话，按排队处理', async () => {
     const h = await makeCmdHarness({ steerEnabled: true })
     h.sendGroupTextAs('启动群任务', 10001) // 管理员开任务
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
@@ -199,15 +149,14 @@ describe('插话资格（steerAllMembers / steerAllowRestricted）', () => {
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(2))
     expect(h.captured.steers).toHaveLength(0)
     expect(h.captured.followups[1].text).toContain('普通成员的补充')
-    await vi.waitFor(() => expect(sentTexts(h.outbound).filter(t => t.includes(QUEUE_NOTICE_TEXT))).toHaveLength(1))
-    expect(sentTexts(h.outbound).filter(t => t.includes(STEER_ACCEPTED_NOTICE))).toHaveLength(0)
+    expect(sentTexts(h.outbound)).toHaveLength(0)
 
     h.client.close()
     await h.bridge.stop()
     await h.connection.stop()
   }, 60_000)
 
-  it('steerAllMembers=true：普通群成员放行自动插话（steer 提交+提交提示，零排队提示）', async () => {
+  it('steerAllMembers=true：普通群成员放行自动插话', async () => {
     const h = await makeCmdHarness({ steerEnabled: true, steerAllMembers: true })
     h.sendGroupTextAs('启动群任务', 10001)
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
@@ -218,8 +167,7 @@ describe('插话资格（steerAllMembers / steerAllowRestricted）', () => {
     expect(h.captured.steers[0].text).toContain('普通成员的补充')
     expect((JSON.parse(h.captured.steers[0].text) as Array<Record<string, unknown>>)[0]).toMatchObject({ qq: '20003' })
     expect(h.captured.followups).toHaveLength(1) // 不新开回合
-    await vi.waitFor(() => expect(sentTexts(h.outbound).filter(t => t.includes(STEER_ACCEPTED_NOTICE))).toHaveLength(1))
-    expect(sentTexts(h.outbound).filter(t => t.includes(QUEUE_NOTICE_TEXT))).toHaveLength(0)
+    expect(sentTexts(h.outbound)).toHaveLength(0)
 
     h.client.close()
     await h.bridge.stop()
@@ -238,14 +186,14 @@ describe('插话资格（steerAllMembers / steerAllowRestricted）', () => {
     expect((JSON.parse(h.captured.steers[0].text) as Array<Record<string, unknown>>)[0]).not.toHaveProperty('role')
     expect(h.captured.steers[0].text).toContain('受限成员的补充')
     expect(h.captured.followups).toHaveLength(1)
-    await vi.waitFor(() => expect(sentTexts(h.outbound).filter(t => t.includes(STEER_ACCEPTED_NOTICE))).toHaveLength(1))
+    expect(sentTexts(h.outbound)).toHaveLength(0)
 
     h.client.close()
     await h.bridge.stop()
     await h.connection.stop()
   }, 60_000)
 
-  it('steerAllowRestricted=false：受限成员一律排队（有排队提示、零 steer）', async () => {
+  it('steerAllowRestricted=false：受限成员一律排队、零 steer、零提示', async () => {
     const h = await makeCmdHarness({ steerEnabled: true, steerAllMembers: true, steerAllowRestricted: false, restrictedMemberPrefix: true })
     h.sendGroupTextAs('启动群任务', 10001)
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
@@ -255,8 +203,7 @@ describe('插话资格（steerAllMembers / steerAllowRestricted）', () => {
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(2))
     expect(h.captured.steers).toHaveLength(0)
     expect(h.captured.followups[1].text).toContain('受限成员的补充')
-    await vi.waitFor(() => expect(sentTexts(h.outbound).filter(t => t.includes(QUEUE_NOTICE_TEXT))).toHaveLength(1))
-    expect(sentTexts(h.outbound).filter(t => t.includes(STEER_ACCEPTED_NOTICE))).toHaveLength(0)
+    expect(sentTexts(h.outbound)).toHaveLength(0)
 
     h.client.close()
     await h.bridge.stop()
