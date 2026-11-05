@@ -191,7 +191,7 @@ export declare class InboundPipeline {
      *   Promise<Segment[]>: 归一化后的段数组。
      *
      * Callers:
-     *   - `recordOf`、`expandQuote`、`expandForward`。
+     *   - `recordOf`、`renderHistoryMessage`、`expandQuote`、`expandForward`。
      */
     private normalizedSegments;
     /**

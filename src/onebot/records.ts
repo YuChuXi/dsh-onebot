@@ -5,6 +5,7 @@
  * 都是同一种形状，模型侧看到的是一个按时间升序的 JSON 数组。
  * @module dsh-onebot/records
  */
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { Segment } from './segments.js'
 import { renderMessage } from './segments.js'
 
@@ -28,13 +29,13 @@ export interface MessageRecord {
 }
 
 /** 记录在模型侧的形状：message 已被渲染成裸字符串 / 段 / 数组。 */
-export interface RenderedRecord {
+export type RenderedRecord = {
   qq: string
   nickname: string
   id?: string
   time?: string
   role?: 'owner' | 'admin'
-  message: unknown
+  message: JsonValue
 }
 
 /**
@@ -128,7 +129,7 @@ export function systemRecord(note: string, clock?: string): MessageRecord {
  */
 export function renderRecord(record: ConversationRecord): RenderedRecord | NoticeRecord {
   if ('notice' in record) return record
-  return { ...record, message: renderMessage(record.message) }
+  return { ...record, message: renderMessage(record.message) as JsonValue }
 }
 
 /**

@@ -7,7 +7,6 @@ import { mkdtempSync, realpathSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHash } from 'node:crypto'
 import { Context } from '@deepseek-ai/cordis'
 
 import { ChatBridge } from '../src/bridge/index.js'
@@ -49,7 +48,7 @@ function makeHarness() {
   const media = {
     downloadUrl: async (url: string, ext: string) => {
       downloads.push(url)
-      const path = join(mediaDir, createHash('md5').update(url).digest('hex') + ext)
+      const path = join(mediaDir, 'download-' + downloads.length + ext)
       await writeFile(path, url.includes('second') ? GIF : PNG)
       return path
     },
@@ -148,8 +147,8 @@ describe('qq_collect_sticker', () => {
       pack: '我的收藏',
       summary: '趴鱼',
       caption: '一条鱼趴在地上流泪，适合表达委屈',
-      md5: createHash('md5').update(PNG).digest('hex'),
     })
+    expect(result.collected[0].file).toBe(join(realpathSync(h.mediaDir), 'stickers', '我的收藏', '趴鱼.png'))
     expect(h.calls).toEqual([])
   })
 
@@ -189,13 +188,28 @@ describe('qq_collect_sticker', () => {
       .rejects.toThrow(/新商城表情包必须给 pack/)
   })
 
-  it('同一包内摘要不可指向两张不同图片', async () => {
+  it('同一表情包内同一摘要重复收藏时幂等，保留第一次的图片', async () => {
     const h = makeHarness()
     const first = await writeImage(h.mediaDir, 'a.png')
     const second = await writeImage(h.mediaDir, 'b.gif', GIF)
-    await expect(h.tool('qq_collect_sticker').execute({
-      items: [{ path: first, summary: '重复', caption: '第一张' }, { path: second, summary: '重复', caption: '第二张' }],
-    }, h.exec('s'))).rejects.toThrow(/已有摘要/)
+    const before = await h.tool('qq_collect_sticker').execute({
+      items: [{ path: first, summary: '重复', caption: '第一张' }],
+    }, h.exec('s')) as { collected: Array<Record<string, unknown>> }
+    const after = await h.tool('qq_collect_sticker').execute({
+      items: [{ path: second, summary: '重复', caption: '第二张' }],
+    }, h.exec('s')) as { collected: Array<Record<string, unknown>> }
+    expect(after.collected[0].file).toBe(before.collected[0].file)
+    expect(after.collected[0].caption).toBe('第一张')
+  })
+
+  it('入站商城表情按落盘元数据自动识别，模型只给 path', async () => {
+    const h = makeHarness()
+    const file = await writeImage(h.mediaDir, 'inbound.gif', GIF)
+    await writeFile(file + '.json', JSON.stringify(MFACE))
+    const result = await h.tool('qq_collect_sticker').execute({
+      pack: '柰子鱼3', items: [{ path: file }],
+    }, h.exec('s')) as { collected: Array<Record<string, unknown>> }
+    expect(result.collected[0]).toMatchObject({ pack: '柰子鱼3', summary: '[飞天猫猫]', mark: MFACE })
   })
 
   it('入站商城表情带已落盘文件收藏：不重新下载，保留五字段', async () => {
@@ -208,13 +222,13 @@ describe('qq_collect_sticker', () => {
     expect(h.downloads).toEqual([])
   })
 
-  it('同一包内相同图片换个摘要收藏时报错，提示改名', async () => {
+  it('同一张图用不同摘要收藏时各存一份', async () => {
     const h = makeHarness()
     const file = await writeImage(h.mediaDir, 'a.png')
     await h.tool('qq_collect_sticker').execute({ items: [{ path: file, summary: '开心', caption: '第一次' }] }, h.exec('s'))
-    await expect(h.tool('qq_collect_sticker').execute({
-      items: [{ path: file, summary: '高兴', caption: '第二次' }],
-    }, h.exec('s'))).rejects.toThrow(/改名请用备注工具/)
+    await h.tool('qq_collect_sticker').execute({ items: [{ path: file, summary: '高兴', caption: '第二次' }] }, h.exec('s'))
+    const list = await h.tool('qq_list_stickers').execute({}, {}) as { faces: Array<Record<string, unknown>> }
+    expect(list.faces.map(face => face.summary)).toEqual(['开心', '高兴'])
   })
 
   it('越界路径拒绝，不写库', async () => {
@@ -347,6 +361,11 @@ describe('qq_send_sticker', () => {
 })
 
 describe('qq_napcat_api 白名单', () => {
+  it('get_msg 放行，用于取原始消息段', async () => {
+    const h = makeHarness()
+    await expect(h.tool('qq_napcat_api').execute({ action: 'get_msg', params: { message_id: 1 } }, {})).resolves.toBeDefined()
+  })
+
   it('QQ 收藏接口不直通', async () => {
     const h = makeHarness()
     await expect(h.tool('qq_napcat_api').execute({ action: 'fetch_custom_face', params: { count: 1 } }, {}))

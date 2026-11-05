@@ -9,7 +9,7 @@ description: NapCat（OneBot 11）白名单接口的参数与返回、消息段�
 
 ## 查接口
 
-`qq_napcat_api` 只放行 `references/api.md` 里的 20 个 action，其他接口会被拒。该文件按用途分节，每个 action 一节，标题是 `### <action> — <中文用途>`，按任务词检索即可命中。
+`qq_napcat_api` 只放行 `references/api.md` 里的 21 个 action，其他接口会被拒。该文件按用途分节，每个 action 一节，标题是 `### <action> — <中文用途>`，按任务词检索即可命中。
 
 需要群号的接口，`group_id` 用系统提示词「当前会话」里的群号；私聊接口用其中的对方 QQ。不要从消息记录或接口返回值里推断。
 
@@ -23,10 +23,10 @@ description: NapCat（OneBot 11）白名单接口的参数与返回、消息段�
 
 表情保存在插件媒体目录的本地库中，按「表情包 + 摘要」组织，不使用 QQ 收藏体系。发送只认 `pack + summary`，详细描述 `caption` 只用于理解与检索。
 
-- 收：入站 `mface` 段带 `summary`、`emoji_id`、`emoji_package_id`、`key`、`url` 与本地文件 `file`。收藏时把该段原样作为 `mface` 传入，并同时给 `path`（段里的 `file`），复用已落盘的字节；不传 `path` 时按 `url` 下载，`url` 过期会失败。
-- 收藏：`qq_collect_sticker` 的 `pack` 是表情包名，一整套一次传完。商城表情的摘要直接取固有 `summary` 原值（含方括号，如 `[飞天猫猫]`）；普通图片必须给 `summary`（定位用短摘要）与 `caption`（画面、情绪、语境的详细描述），默认进「我的收藏」。
+- 收：商城表情在入站记录里就是 `image` 段，带 `summary` 与本地 `file`。重放所需的 `emoji_id`、`emoji_package_id`、`key`、`url` 由插件随图片保存，既不渲染给模型，也不需要模型搬运。
+- 收藏：`qq_collect_sticker` 的 `pack` 是表情包名，一整套一次传完。每项只需给 `path`（入站段的 `file` 加上系统提示词给出的媒体目录前缀）；插件按随图保存的元数据自动识别商城表情，普通图片另需 `summary` 与 `caption`。
 - 看：`qq_list_stickers` 按 `pack` 列出一套，文本给摘要与详细描述；`preview=true` 额外返回一张 4×4 拼图（一套 16 张，每格 300×300），一次看完整套画面后批量补描述。
-- 补描述：`qq_remark_sticker` 按 `pack + summary` 批量写 `caption`，`newSummary` 用于改名。
+- 补描述：`qq_remark_sticker` 按 `pack + summary` 批量写 `caption`，`newSummary` 用于改名；文件会随摘要一起改名。
 - 发：`qq_send_sticker` 用 `pack + summary`；全库摘要唯一时可省略 `pack`。摘要按原值精确匹配，直接从 `qq_list_stickers` 复制即可。
 
 经典表情（`face` 段）的 id 与中文名对照见 `references/faces.md`。
@@ -50,9 +50,9 @@ description: NapCat（OneBot 11）白名单接口的参数与返回、消息段�
 
 ## 历史返回
 
-`qq_group_history` 返回 `{messages, next_seq}`。每条消息含 `message_id`、`time`、`user_id`、`nickname`、`text`；`text` 已解析为纯文本，不含段数组，需要段结构时用 `get_forward_msg`。
+`qq_group_history` 返回 `{messages, next_seq}`。每条消息与入站记录的字段相同：`qq`、`nickname`、`id`、`time`、`role?`、`message`；`message` 走与入站同一套渲染（纯文本是字符串，含媒体时是段数组，图片已取成本机文件、@ 已补显示名，引用与合并转发按配置展开）。需要未归一化的 NapCat 原始段时传 `raw=true`。
 
-`next_seq` 是继续向更早翻页的唯一游标，直接作为 `message_seq` 传入即可，返回结果不会重复上一页的最后一条。不要用 `message_id` 或消息里的其他字段替代，NapCat 只认这个短 id。`next_seq` 为 `null` 表示已经没有更早的消息。
+`next_seq` 是继续向更早翻页的唯一游标，直接作为 `message_seq` 传入即可，返回结果不会重复上一页的最后一条。不要用 `id` 或消息里的其他字段替代，NapCat 只认这个短 id。`next_seq` 为 `null` 表示已经没有更早的消息。
 
 入站上下文被截断时会出现一条「更早的消息已省略」的系统记录，并附上 `message_seq=<n>`；把它传给 `qq_group_history` 就能取到被省略的那部分。
 

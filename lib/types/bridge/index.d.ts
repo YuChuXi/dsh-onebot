@@ -10,11 +10,13 @@
 import type { ModelSelection } from '@deepseek-ai/dsh-agent';
 import type { AgentDefaultModelLike, BridgeDeps } from './config.js';
 import type { OneBotEvent } from '../onebot/connection.js';
+import type { RenderedRecord } from '../onebot/records.js';
 import type { ChatId } from '../chat/index.js';
 import type { OutboundSegment, SendOptions } from '../outbound/index.js';
 import type { ChatAgent } from '../registry/index.js';
 import type { ChatModelBinding } from './config.js';
 import { TimerRunner } from '../timers/index.js';
+import type { RawMessage } from '../inbound/normalize.js';
 /**
  * Bridge between OneBot events and dsh agents. Create via the constructor and
  * call start() from the plugin's effect; call stop() on disposal.
@@ -167,6 +169,21 @@ export declare class ChatBridge {
      *   - `src/tools/stickers.ts`（qq_collect_sticker 的 url / mface 分支）。
      */
     saveSticker(url: string): Promise<string>;
+    /**
+     * 按入站同一套链路（媒体回填、@ 名字、引用/转发展开）把一条历史消息做成
+     * 模型侧记录，渲染与序列化口径与入站载荷完全一致。
+     *
+     * Args:
+     *   message (RawMessage): `get_group_msg_history` 返回的原始消息。
+     *   chatId (ChatId): 会话 id。
+     *
+     * Returns:
+     *   Promise<RenderedRecord>: 与入站载荷同形的记录。
+     *
+     * Callers:
+     *   - `src/tools/index.ts`（qq_group_history）。
+     */
+    recordOfHistoryMessage(message: RawMessage, chatId: ChatId): Promise<RenderedRecord>;
     /**
      * Send raw OneBot segments (used by the media tools).
      * @param chatId - target chat.

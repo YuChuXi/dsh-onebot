@@ -2,17 +2,53 @@
  * 本地表情库：按“表情包 / 表情摘要”组织普通图片与商城表情。
  *
  * 索引文件 `<mediaDir>/stickers/index.json` 保存记录数组；`pack + summary`
- * 是唯一键。图片按内容 MD5 命名；同一表情包内的相同内容复用记录。
+ * 是唯一键。图片按 `<表情包>/<摘要>.<ext>` 存放，目录与文件名即定位信息。
  * @module dsh-onebot/media/stickers
  */
-import { createHash } from 'node:crypto'
 import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 
 import { extForInboundName } from './store.js'
 
 /** 普通图片默认所属的表情包。 */
 export const DEFAULT_STICKER_PACK = '我的收藏'
+
+/**
+ * 把表情包名或摘要清洗成安全的单层路径片段。
+ *
+ * Args:
+ *   value (string): 表情包名或摘要。
+ *
+ * Returns:
+ *   string: 可直接作为目录名或文件名的片段。
+ *
+ * Callers:
+ *   - `stickerPath`。
+ */
+function pathSegment(value: string): string {
+  const cleaned = value.replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim()
+  if (cleaned === '' || cleaned === '.' || cleaned === '..') return '_'
+  return cleaned.slice(0, 64)
+}
+
+/**
+ * 表情图片在库内的路径：`<库目录>/<表情包>/<摘要><扩展名>`。
+ *
+ * Args:
+ *   dir (string): 表情库根目录。
+ *   pack (string): 表情包名称。
+ *   summary (string): 表情摘要。
+ *   ext (string): 含点号的扩展名。
+ *
+ * Returns:
+ *   string: 目标路径。
+ *
+ * Callers:
+ *   - `addMany`、`remarkMany`。
+ */
+function stickerPath(dir: string, pack: string, summary: string, ext: string): string {
+  return join(dir, pathSegment(pack), pathSegment(summary) + ext)
+}
 
 /** 商城表情五字段；摘要同时是表情的定位摘要。 */
 export type StickerMark = {
@@ -33,8 +69,6 @@ export type StickerRecord = {
   caption: string
   /** 表情图片的本机绝对路径。 */
   file: string
-  /** 图片内容 MD5（小写十六进制）。 */
-  md5: string
   /** 商城表情元数据；普通图片没有。 */
   mark?: StickerMark
   /** 收录时间（毫秒时间戳）。 */
@@ -117,29 +151,19 @@ export class StickerLibrary {
     const results: StickerRecord[] = []
     let changed = false
     for (const source of sources) {
-      const data = await readFile(source.file)
-      const md5 = createHash('md5').update(data).digest('hex')
-      const existing = records.find(record => record.pack === source.pack && record.md5 === md5)
+      const existing = records.find(record => record.pack === source.pack && record.summary === source.summary)
       if (existing !== undefined) {
-        if (existing.summary !== source.summary) {
-          throw new Error('表情库：表情包「' + source.pack + '」已收录这张图，摘要为「' + existing.summary + '」；改名请用备注工具')
-        }
         results.push({ ...existing })
         continue
       }
-      const conflict = records.find(record => record.pack === source.pack && record.summary === source.summary)
-      if (conflict !== undefined) {
-        throw new Error('表情库：表情包「' + source.pack + '」已有摘要「' + source.summary + '」')
-      }
-      await mkdir(this.dir, { recursive: true })
-      const file = join(this.dir, md5 + extForInboundName(basename(source.file)))
-      if (source.file !== file) await copyFile(source.file, file)
+      const file = stickerPath(this.dir, source.pack, source.summary, extForInboundName(basename(source.file)))
+      await mkdir(dirname(file), { recursive: true })
+      await copyFile(source.file, file)
       const record: StickerRecord = {
         pack: source.pack,
         summary: source.summary,
         caption: source.caption,
         file,
-        md5,
         ...(source.mark === undefined ? {} : { mark: source.mark }),
         addedAt: Date.now(),
       }
@@ -185,6 +209,17 @@ export class StickerLibrary {
       if (seen.has(key)) throw new Error('表情库：表情包「' + record.pack + '」已有摘要「' + record.summary + '」')
       seen.add(key)
     }
+    // 摘要改名后文件跟着改，保持目录与文件名即定位信息。
+    for (const change of changes) {
+      if (change.newSummary === undefined) continue
+      const record = next.find(item => item.pack === change.pack && item.summary === change.newSummary)
+      if (record === undefined) throw new Error('表情库：修改结果丢失')
+      const target = stickerPath(this.dir, record.pack, record.summary, extname(record.file))
+      if (target === record.file) continue
+      await mkdir(dirname(target), { recursive: true })
+      await rename(record.file, target)
+      record.file = target
+    }
     await this.writeIndex(next)
     return changes.map(change => {
       const record = next.find(item => item.pack === change.pack && item.summary === (change.newSummary ?? change.summary))
@@ -218,8 +253,8 @@ export class StickerLibrary {
       const record = item as Record<string, unknown>
       if (typeof record.pack !== 'string' || typeof record.summary !== 'string' ||
           typeof record.caption !== 'string' || typeof record.file !== 'string' ||
-          typeof record.md5 !== 'string' || typeof record.addedAt !== 'number') {
-        throw new Error('表情库索引记录缺少 pack/summary/caption/file/md5/addedAt：' + this.indexPath)
+          typeof record.addedAt !== 'number') {
+        throw new Error('表情库索引记录缺少 pack/summary/caption/file/addedAt：' + this.indexPath)
       }
     }
     return raw as StickerRecord[]

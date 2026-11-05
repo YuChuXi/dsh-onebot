@@ -8,6 +8,7 @@
  * 这里没有 CQ 字符串层：消息只按段数组进出。
  * @module dsh-onebot/segments
  */
+import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import { mediaKindOf, type MediaKind } from '../media/kinds.js'
 import type { OutboundSegment } from '../outbound/index.js'
 import { scalar, text } from './segment-types/primitives.js'
@@ -78,9 +79,9 @@ export interface UnknownSegment {
 export type Segment = KnownSegment | UnknownSegment
 
 /** 入站事件里段数组的宽松形态（实现之间字段有出入）。 */
-export interface IncomingSegment {
+export type IncomingSegment = {
   type: string
-  data?: Record<string, unknown>
+  data?: { [key: string]: JsonValue }
 }
 
 /** 待取字节的媒体引用：解析产物，交给媒体存储换成本地文件。 */
@@ -211,9 +212,7 @@ function unpackRendered(value: unknown): IncomingSegment[] {
   if (value === null || typeof value !== 'object') return []
   const segment = value as { type?: unknown; data?: unknown }
   if (typeof segment.type !== 'string' || segment.type === '') return []
-  const data = typeof segment.data === 'object' && segment.data !== null
-    ? segment.data as Record<string, unknown>
-    : {}
+  const data = (typeof segment.data === 'object' && segment.data !== null ? segment.data : {}) as IncomingSegment['data']
   return [{ type: segment.type, data }]
 }
 
@@ -246,7 +245,10 @@ function mediaRefOf(segment: Segment, raw: IncomingSegment, index: number): Medi
     ...(scalar(data.sub_type) !== undefined ? { subType: scalar(data.sub_type) } : {}),
     ...(scalar(data['sub-type']) !== undefined ? { subType: scalar(data['sub-type']) } : {}),
     ...(text(data.summary) !== undefined ? { summary: text(data.summary) } : {}),
-    ...(kind === 'sticker' ? { mface: mfaceOf(data) } : {}),
+    // 商城表情可能是独立 mface 段，也可能是挂了五字段的 image 段。
+    ...(kind === 'sticker' || text(data.emoji_id) !== undefined || scalar(data.emoji_package_id) !== undefined
+      ? { mface: mfaceOf(data) }
+      : {}),
   }
 }
 
@@ -263,10 +265,12 @@ function mediaRefOf(segment: Segment, raw: IncomingSegment, index: number): Medi
  *   - `mediaRefOf`。
  */
 function mfaceOf(data: Record<string, unknown>): SegmentData['mface'] {
+  const packageId = scalar(data.emoji_package_id)
   return {
     ...(text(data.summary) !== undefined ? { summary: text(data.summary) } : {}),
     ...(text(data.emoji_id) !== undefined ? { emoji_id: text(data.emoji_id) } : {}),
-    ...(text(data.emoji_package_id) !== undefined ? { emoji_package_id: text(data.emoji_package_id) } : {}),
+    // NapCat 把 emoji_package_id 当数字给，重放要求字符串。
+    ...(packageId !== undefined ? { emoji_package_id: String(packageId) } : {}),
     ...(text(data.key) !== undefined ? { key: text(data.key) } : {}),
     ...(text(data.url) !== undefined ? { url: text(data.url) } : {}),
   }

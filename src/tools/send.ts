@@ -9,7 +9,7 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 
 import type { ChatBridge } from '../bridge/index.js'
 import { isUrl } from '../media/store.js'
-import { normalizeSegment } from '../onebot/segments.js'
+import { normalizeSegment, type IncomingSegment } from '../onebot/segments.js'
 import type { SegmentSendContext } from '../onebot/segment-types/registry.js'
 import type { OutboundSegment } from '../outbound/index.js'
 import { CHAT_ID_PARAM, END_PARAM, mediaRoots, resolveChat, type MediaLimits, type RegisterTool } from './shared.js'
@@ -19,8 +19,9 @@ function sendOutput() {
   return {
     schema: { type: 'json' as const },
     render: (_args: unknown, value: unknown) => {
-      const v = value as { messageId?: string | null }
-      return [{ type: 'text' as const, text: v.messageId != null ? '已发送（message_id=' + v.messageId + '）' : '已发送' }]
+      const v = value as { messageId?: string | null; note?: unknown }
+      const head = v.messageId != null ? '已发送（message_id=' + v.messageId + '）' : '已发送'
+      return [{ type: 'text' as const, text: typeof v.note === 'string' ? head + '\n' + v.note : head }]
     },
   }
 }
@@ -68,7 +69,7 @@ async function outboundSegments(
       dropped.push('未知段')
       continue
     }
-    const data = typeof raw.data === 'object' && raw.data !== null ? raw.data as Record<string, unknown> : {}
+    const data = (typeof raw.data === 'object' && raw.data !== null ? raw.data : {}) as IncomingSegment['data']
     const segment = await normalizeSegment({ type, data }, ctx)
     if (segment === undefined) {
       dropped.push(type)

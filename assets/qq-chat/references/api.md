@@ -185,6 +185,18 @@
 
 无返回数据。
 
+### get_msg — 取单条消息的原始段
+
+| 字段 | 类型 | 必选 | 说明 |
+|---|---|---|---|
+| `message_id` | string 或 number | 是 | 消息 id（`qq_group_history` 返回的 `message_id` 可直接用） |
+
+```json
+{"message_id":608068782,"real_id":608068782,"time":1730000000,"sender":{"user_id":123,"nickname":"..."},"message":[{"type":"mface","data":{"summary":"[飞天猫猫]","emoji_id":"...","emoji_package_id":"...","key":"...","url":"https://..."}}]}
+```
+
+`message` 是未归一化的原始段，字段按 `segments.md` 解析。商城表情在这里有两种形态：`mface`（带五字段，可原样重放）或 `image` + `summary`（形如 `[如何成为坏猫]`，只能按图片处理）。收藏时把对应段原样交给 `qq_collect_sticker`。
+
 ### get_forward_msg — 取合并转发内容
 
 | 字段 | 类型 | 必选 | 说明 |

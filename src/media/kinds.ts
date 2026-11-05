@@ -60,6 +60,7 @@ const voiceBytes: MediaBytesFetcher = async (call, file) => {
 
 /**
  * 普通媒体段的回填：模型可见的文件路径，加上贴纸标记与 QQ 自带说明。
+ * 商城表情的重放字段属于代码维护的元数据，不渲染给模型。
  *
  * Args:
  *   ref (MediaRef): 媒体引用（携带 sub_type / summary）。
@@ -69,7 +70,7 @@ const voiceBytes: MediaBytesFetcher = async (call, file) => {
  *   Record<string, unknown>: 段的 data。
  *
  * Callers:
- *   - `MEDIA_KINDS` 的 image / voice / video 项。
+ *   - `MEDIA_KINDS` 的 image / voice / video / sticker 项。
  */
 function mediaData(ref: MediaRef, path: string): Record<string, unknown> {
   const summary = typeof ref.summary === 'string' ? ref.summary : ''
@@ -121,11 +122,7 @@ export const MEDIA_KINDS: Record<MediaKind, MediaKindSpec> = {
     segment: 'mface',
     limit: 'maxImageBytes',
     // 商城表情重放依赖五字段，入站解析时随引用带到回填结果里。
-    resolved: (ref, path) => ({
-      file: path,
-      ...(ref.summary !== undefined && ref.summary !== '' ? { summary: ref.summary } : {}),
-      ...(ref.mface ?? {}),
-    }),
+    resolved: mediaData,
   },
 }
 

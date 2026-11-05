@@ -18,8 +18,6 @@ export type StickerRecord = {
     caption: string;
     /** 表情图片的本机绝对路径。 */
     file: string;
-    /** 图片内容 MD5（小写十六进制）。 */
-    md5: string;
     /** 商城表情元数据；普通图片没有。 */
     mark?: StickerMark;
     /** 收录时间（毫秒时间戳）。 */

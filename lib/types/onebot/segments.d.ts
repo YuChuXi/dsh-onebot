@@ -8,6 +8,7 @@
  * 这里没有 CQ 字符串层：消息只按段数组进出。
  * @module dsh-onebot/segments
  */
+import type { JsonValue } from '@deepseek-ai/dsh-util-values';
 import { type MediaKind } from '../media/kinds.js';
 import type { OutboundSegment } from '../outbound/index.js';
 import { type SegmentSendContext } from './segment-types/registry.js';
@@ -139,10 +140,12 @@ export interface UnknownSegment {
 /** 管线内部的段联合：判别属性 `type` 全是字面量，switch 后可穷尽收窄。 */
 export type Segment = KnownSegment | UnknownSegment;
 /** 入站事件里段数组的宽松形态（实现之间字段有出入）。 */
-export interface IncomingSegment {
+export type IncomingSegment = {
     type: string;
-    data?: Record<string, unknown>;
-}
+    data?: {
+        [key: string]: JsonValue;
+    };
+};
 /** 待取字节的媒体引用：解析产物，交给媒体存储换成本地文件。 */
 export interface MediaRef {
     kind: MediaKind;

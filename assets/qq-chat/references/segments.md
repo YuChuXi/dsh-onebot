@@ -7,7 +7,7 @@
 | type | data 字段 | 说明 |
 |---|---|---|
 | `text` | `text` | 纯文本 |
-| `image` | `file`（媒体目录内的文件名）, `sub_type?`, `summary?` | `sub_type=1` 是表情包；`summary` 是 QQ 自带的说明 |
+| `image` | `file`（媒体目录内的文件名）, `sub_type?`, `summary?` | `sub_type=1` 是表情包；商城表情的重放字段由插件随文件保存，不出现在这里 |
 | `record` | `file`（媒体目录内的文件名）, `sub_type?`, `summary?` | 语音；入站先给段，转写完成后以补充指令到达 |
 | `video` | `file`（媒体目录内的文件名）, `sub_type?`, `summary?` | 短视频 |
 | `file` | `file`（媒体目录内的文件名）, `name?`, `file_id?` | 群/私聊文件 |

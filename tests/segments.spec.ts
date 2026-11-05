@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { detectMention, fillMentionNames, parseMessage, renderMessage, renderSegment } from '../src/onebot/segments.js'
+import { detectMention, fillMentionNames, MEDIA_KINDS, parseMessage, renderMessage, renderSegment } from '../src/onebot/segments.js'
 import { formatRecords, messageRecord, renderRecord, systemRecord } from '../src/onebot/records.js'
 import { dormancyKey, isSleeping, sleepWindowKey } from '../src/inbound/sleep.js'
 import { faceName } from '../src/onebot/faces.js'
@@ -63,6 +63,37 @@ describe('parseMessage', () => {
     const parsed = parseMessage([{ type: 'mface', data: { summary: '[x]', url: 'not-a-url' } }])
     expect(parsed.media[0]).toMatchObject({ kind: 'sticker', url: 'not-a-url' })
     expect(parsed.segments[0]).toMatchObject({ type: 'mface', data: { summary: '[x]', url: 'not-a-url' } })
+  })
+
+  it('keeps market-sticker fields carried by an image segment', () => {
+    const parsed = parseMessage([{
+      type: 'image',
+      data: {
+        summary: '[飞天猫猫]',
+        file: 'f6-a.gif',
+        url: 'https://gxh.vip/raw300.gif',
+        key: 'd9b8f42a008893aa',
+        emoji_id: 'f649853bda4e4d1f0e76c535aad2cd4f',
+        emoji_package_id: 241895,
+      },
+    }])
+    expect(parsed.media[0]).toMatchObject({
+      kind: 'image',
+      summary: '[飞天猫猫]',
+      mface: {
+        summary: '[飞天猫猫]',
+        url: 'https://gxh.vip/raw300.gif',
+        key: 'd9b8f42a008893aa',
+        emoji_id: 'f649853bda4e4d1f0e76c535aad2cd4f',
+        emoji_package_id: '241895',
+      },
+    })
+    // 五字段留在引用里供落盘与重放，渲染给模型的段只带文件与摘要。
+    const resolved = MEDIA_KINDS.image.resolved(parsed.media[0], 'media/x.gif')
+    expect(resolved).toMatchObject({ file: 'media/x.gif', summary: '[飞天猫猫]' })
+    expect(resolved).not.toHaveProperty('emoji_id')
+    expect(resolved).not.toHaveProperty('key')
+    expect(resolved).not.toHaveProperty('url')
   })
 
   it('keeps an unknown segment under the exact OneBot type name on render', () => {

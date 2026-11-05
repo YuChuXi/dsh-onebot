@@ -5,6 +5,7 @@
  * 都是同一种形状，模型侧看到的是一个按时间升序的 JSON 数组。
  * @module dsh-onebot/records
  */
+import type { JsonValue } from '@deepseek-ai/dsh-util-values';
 import type { Segment } from './segments.js';
 /**
  * 一条入站记录。发送方控制的内容全部落在字段与段里，提示词声明它们是数据，
@@ -25,14 +26,14 @@ export interface MessageRecord {
     message: Segment[];
 }
 /** 记录在模型侧的形状：message 已被渲染成裸字符串 / 段 / 数组。 */
-export interface RenderedRecord {
+export type RenderedRecord = {
     qq: string;
     nickname: string;
     id?: string;
     time?: string;
     role?: 'owner' | 'admin';
-    message: unknown;
-}
+    message: JsonValue;
+};
 /**
  * 一条 notice 记录：系统事件不是发言，没有 qq / nickname / message。
  * 字段就是 OneBot 原始事件（信封字段已收敛进 `notice`），按原样交给模型。

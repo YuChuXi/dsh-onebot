@@ -19,6 +19,7 @@ import { registerTools } from '../src/tools/index.js'
 interface SendTool {
   name: string
   execute: (args: unknown, exec: unknown) => Promise<unknown>
+  output?: { render: (args: unknown, value: unknown) => Array<{ type: string; text?: string }> }
 }
 
 /** Real ChatBridge + registered qq_* tools with a recording connection stub. */
@@ -181,6 +182,19 @@ describe('qq_send_* local-path outbound gate (M1-A3b)', () => {
     expect(result.sent).toBe(true)
     expect(h.sentSegment()).toMatchObject({ type: 'image', data: { url: 'https://example.com/pic.jpg' } })
   })
+
+  it('surfaces dropped segments to the model instead of only reporting success', async () => {
+    const h = await makeHarness()
+    const sessionId = 'sess-member'
+    h.seed(sessionId, 'member')
+    const tool = h.tool('qq_send_message')
+    const value = await tool.execute({
+      segments: [{ type: 'text', data: { text: 'hi' } }, { type: 'nope', data: {} }],
+    }, h.exec(sessionId))
+    const text = (tool.output?.render({}, value) ?? []).map(block => block.text ?? '').join('\n')
+    expect(text).toContain('已发送')
+    expect(text).toContain('已忽略这些段：nope')
+  })
 })
 
 describe('qq_group_history paging', () => {
@@ -193,11 +207,33 @@ describe('qq_group_history paging', () => {
       next_seq: number | null
     }
     expect(page.messages).toHaveLength(1)
-    expect(page.messages[0]).toMatchObject({ message_id: '5', text: 'older' })
+    expect(page.messages[0]).toMatchObject({ id: '5', message: 'older' })
     expect(page.messages[0]).not.toHaveProperty('message_seq')
     expect(page.next_seq).toBe(5)
     const call = h.calls.find(c => c.action === 'get_group_msg_history')
     expect(call?.params).toMatchObject({ group_id: 20002, count: 21, message_seq: '10', reverse_order: true })
+  })
+
+  it('renders the message body into model-facing content, not just a count', async () => {
+    const h = await makeHarness()
+    const sessionId = 'acc-history'
+    h.seed(sessionId, 'member')
+    const tool = h.tool('qq_group_history')
+    const page = await tool.execute({ count: 1 }, h.exec(sessionId))
+    const blocks = tool.output?.render({}, page) ?? []
+    const text = blocks.map(block => block.text ?? '').join('\n')
+    expect(text).toContain('"message":"hi"')
+    expect(text).toContain('"next_seq":5')
+  })
+
+  it('raw=true returns the untouched NapCat segments', async () => {
+    const h = await makeHarness()
+    const sessionId = 'acc-history'
+    h.seed(sessionId, 'member')
+    const page = await h.tool('qq_group_history').execute({ count: 1, raw: true }, h.exec(sessionId)) as {
+      messages: Array<Record<string, unknown>>
+    }
+    expect(page.messages[0].message).toEqual([{ type: 'text', data: { text: 'older' } }])
   })
 })
 

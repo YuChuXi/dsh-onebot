@@ -14,10 +14,11 @@ import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
 import type { ChatBridge } from '../bridge/index.js'
 import type { OneBotConnection } from '../onebot/connection.js'
-import { splitChatId } from '../chat/index.js'
+import type { RawMessage } from '../inbound/normalize.js'
+import { displayName, splitChatId } from '../chat/index.js'
+import { formatClock } from '../shared/clock.js'
 import { encodeLocalFile, isLocalPath } from '../media/local.js'
 import { StickerLibrary } from '../media/stickers.js'
-import { incomingSegments, parseMessage } from '../onebot/segments.js'
 import { registerSendTools } from './send.js'
 import { registerStickerTools, type StickerImageStore } from './stickers.js'
 import { registerScheduleTools } from './schedule.js'
@@ -30,6 +31,7 @@ const NAPCAT_API_WHITELIST = [
   'get_stranger_info',
   'group_poke',
   'friend_poke',
+  'get_msg',
   'get_forward_msg',
   'get_record',
   'get_file',
@@ -52,6 +54,31 @@ const NAPCAT_LOCAL_FILES: Record<string, { field: string; limit: 'maxImageBytes'
   upload_group_file: { field: 'file', limit: 'maxFileBytes' },
   upload_private_file: { field: 'file', limit: 'maxFileBytes' },
   ocr_image: { field: 'image', limit: 'maxImageBytes' },
+}
+
+/**
+ * 把一条历史消息做成未归一化的模型侧记录：字段与入站记录一致，
+ * `message` 保留 NapCat 原始段，供模型核对 url / emoji_id / sub_type 等。
+ *
+ * Args:
+ *   msg (RawMessage): `get_group_msg_history` 返回的原始消息。
+ *
+ * Returns:
+ *   JsonValue: 记录。
+ *
+ * Callers:
+ *   - `qq_group_history`（raw=true）。
+ */
+function rawHistoryRecord(msg: RawMessage): JsonValue {
+  const sender = msg.sender ?? {}
+  const qq = String(sender.user_id ?? msg.user_id ?? '')
+  return {
+    qq,
+    nickname: displayName(sender, qq),
+    ...(msg.message_id != null ? { id: String(msg.message_id) } : {}),
+    ...(msg.time != null ? { time: formatClock(Number(msg.time) * 1000) } : {}),
+    message: msg.message ?? [],
+  }
 }
 
 /** 一段人类可读的可用思考强度说明（能力未知 / 不支持 / 档位列表）。 */
@@ -239,31 +266,21 @@ export function registerTools(
 
   register(defineTool({
     name: 'qq_group_history',
-    description: '拉取群聊最近消息历史（供总结群内上下文、查看用户之前的发言）。仅群聊可用。',
+    description: '拉取群聊历史消息。每条消息按入站同一套渲染给出：媒体已取成本机文件、@ 补了显示名、引用与合并转发按配置展开；raw=true 时改给 NapCat 原始段。更早的消息用返回的 next_seq 继续翻页。仅群聊可用。',
     parameters: {
       chat_id: { type: 'string', description: '目标群会话 group:<群号>；省略时默认当前会话（须为群聊）' },
       count: { type: 'number', description: '拉取条数（≤50，默认 20）' },
       message_seq: { type: 'number', description: '继续向更早翻页的游标，取上一页返回的 next_seq；省略时返回最近消息' },
+      raw: { type: 'boolean', description: '返回 NapCat 原始 message 段，不做归一化（含 url / emoji_id / sub_type 等）；默认 false' },
     },
     output: {
-      schema: {
-        type: 'object',
-        properties: {
-          messages: { type: 'array', items: { type: 'object', additionalProperties: true } },
-          next_seq: { oneOf: [{ type: 'number' }, { type: 'null' }] },
-        },
-        additionalProperties: false,
-      },
-      render: (_args: unknown, value: unknown) => {
-        const page = (value ?? {}) as { messages?: unknown; next_seq?: unknown }
-        const list = Array.isArray(page.messages) ? page.messages : []
-        const cursor = typeof page.next_seq === 'number' ? '，更早的游标 ' + page.next_seq : ''
-        return [{ type: 'text', text: list.length + ' 条历史消息' + cursor }]
-      },
+      schema: { type: 'json' },
+      // 与入站载荷 formatRecords 同一种序列化：紧凑 JSON，不额外缩进。
+      render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }],
     },
     isConcurrencySafe: () => true,
     execute: async (args, exec) => {
-      const a = args as { chat_id?: unknown; count?: unknown; message_seq?: unknown }
+      const a = args as { chat_id?: unknown; count?: unknown; message_seq?: unknown; raw?: unknown }
       const chatId = resolveChat(bridge, exec, a.chat_id)
       if (splitChatId(chatId).kind !== 'group') throw new Error('qq_group_history: 仅支持群聊')
       const groupId = Number(splitChatId(chatId).target)
@@ -279,37 +296,25 @@ export function registerTools(
         params.reverse_order = true
       }
       const data = await connection.call('get_group_msg_history', params) as { messages?: unknown }
-      const raw = Array.isArray(data.messages) ? data.messages : []
+      const fetched = Array.isArray(data.messages) ? data.messages : []
       // NapCat 以传入游标为包含边界返回，剔除该条避免与上一页重复。
-      const messages = typeof a.message_seq === 'number'
-        ? raw.filter(m => Number((m as Record<string, unknown>).message_seq) !== a.message_seq)
-        : raw
-      const rows = messages.map(m => {
-        const msg = m as Record<string, unknown>
-        const sender = (msg.sender ?? {}) as Record<string, unknown>
-        const message = msg.message
-        const parsed = parseMessage(incomingSegments(message))
-        return {
-          message_id: msg.message_id != null ? String(msg.message_id) : null,
-          time: msg.time != null ? String(msg.time) : null,
-          user_id: sender.user_id != null ? String(sender.user_id) : msg.user_id != null ? String(msg.user_id) : null,
-          nickname: typeof sender.card === 'string' && sender.card !== '' ? sender.card
-            : typeof sender.nickname === 'string' && sender.nickname !== '' ? sender.nickname
-              : String(sender.user_id ?? ''),
-          text: parsed.text,
-        }
-      })
+      const incoming = (typeof a.message_seq === 'number'
+        ? fetched.filter(m => Number((m as Record<string, unknown>).message_seq) !== a.message_seq)
+        : fetched) as RawMessage[]
+      const messages: JsonValue[] = []
+      for (const msg of incoming) {
+        messages.push(a.raw === true ? rawHistoryRecord(msg) : await bridge.recordOfHistoryMessage(msg, chatId))
+      }
       let nextSeq: number | null = null
       let earliest = Infinity
-      for (const m of messages) {
-        const msg = m as Record<string, unknown>
+      for (const msg of incoming) {
         const time = Number(msg.time)
         if (msg.message_seq != null && Number.isFinite(time) && time < earliest) {
           earliest = time
           nextSeq = Number(msg.message_seq)
         }
       }
-      return { messages: rows, next_seq: nextSeq }
+      return { messages, next_seq: nextSeq }
     },
   }))
 

@@ -26,6 +26,8 @@ import { extForUrl } from '../media/store.js'
 import type { Transcriber } from '../media/stt.js'
 import { transcriptLabel } from '../media/stt.js'
 import type { MediaRef } from '../onebot/segments.js'
+import type { RenderedRecord } from '../onebot/records.js'
+import { renderRecord } from '../onebot/records.js'
 import type { ChatId, UserRole } from '../chat/index.js'
 import { classifyUserRole, displayName, splitChatId } from '../chat/index.js'
 import type { AccessPolicyConfig } from '../chat/index.js'
@@ -39,7 +41,7 @@ import type { ChatAgent } from '../registry/index.js'
 import type { ChatModelBinding } from './config.js'
 import { InboundPipeline } from '../inbound/index.js'
 import { TimerRunner } from '../timers/index.js'
-import type { NormalizedInbound } from '../inbound/normalize.js'
+import type { NormalizedInbound, RawMessage } from '../inbound/normalize.js'
 import { describeError, errorStack } from '../shared/errors.js'
 import { currentTrace, newTraceId, runWithTrace, TRACE_REASONS } from '../ops/trace.js'
 import type { TraceSink, TraceScope } from '../ops/trace.js'
@@ -345,6 +347,24 @@ export class ChatBridge {
    */
   async saveSticker(url: string): Promise<string> {
     return await this.deps.media.downloadUrl(url, extForUrl(url, 'sticker'), this.deps.config.maxImageBytes)
+  }
+
+  /**
+   * 按入站同一套链路（媒体回填、@ 名字、引用/转发展开）把一条历史消息做成
+   * 模型侧记录，渲染与序列化口径与入站载荷完全一致。
+   *
+   * Args:
+   *   message (RawMessage): `get_group_msg_history` 返回的原始消息。
+   *   chatId (ChatId): 会话 id。
+   *
+   * Returns:
+   *   Promise<RenderedRecord>: 与入站载荷同形的记录。
+   *
+   * Callers:
+   *   - `src/tools/index.ts`（qq_group_history）。
+   */
+  async recordOfHistoryMessage(message: RawMessage, chatId: ChatId): Promise<RenderedRecord> {
+    return renderRecord(await this.inbound.recordOf(message, chatId)) as RenderedRecord
   }
 
   /**

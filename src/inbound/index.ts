@@ -433,7 +433,7 @@ export class InboundPipeline {
    *   Promise<Segment[]>: 归一化后的段数组。
    *
    * Callers:
-   *   - `recordOf`、`expandQuote`、`expandForward`。
+   *   - `recordOf`、`renderHistoryMessage`、`expandQuote`、`expandForward`。
    */
   private async normalizedSegments(parsed: ParsedMessage, chatId: ChatId): Promise<Segment[]> {
     const segments = parsed.segments.map(segment => ({ ...segment, data: { ...segment.data } })) as Segment[]
@@ -462,6 +462,10 @@ export class InboundPipeline {
       const segment = segments[index]
       if (segment === undefined) continue
       const path = await this.resolveMediaPath(ref, chatId)
+      if (path !== '' && ref.mface !== undefined) {
+        // 商城表情的重放字段随图片落盘，收藏时按文件读取；清理按 media_ 前缀一并删除。
+        await writeFile(path + '.json', JSON.stringify(ref.mface), 'utf8')
+      }
       segments[index] = path !== ''
         ? withMediaPath(segment, ref, mediaDisplayPath(this.ctx.media.dir, path))
         : { type: 'text', data: { text: '(' + mediaLabel(ref.kind) + '未取到)' } }
