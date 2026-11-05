@@ -185,6 +185,19 @@ export declare class ChatBridge {
      */
     recordOfHistoryMessage(message: RawMessage, chatId: ChatId): Promise<RenderedRecord>;
     /**
+     * 取一条消息的原始记录，供按 message_id 收藏等场景使用。
+     *
+     * Args:
+     *   messageId (number): OneBot 消息 id。
+     *
+     * Returns:
+     *   Promise<RawMessage | undefined>: 原始消息；取不到时为 undefined。
+     *
+     * Callers:
+     *   - `src/tools/stickers.ts`（qq_collect_message_sticker）。
+     */
+    rawMessage(messageId: number): Promise<RawMessage | undefined>;
+    /**
      * Send raw OneBot segments (used by the media tools).
      * @param chatId - target chat.
      * @param segments - outbound segments.

@@ -368,6 +368,22 @@ export class ChatBridge {
   }
 
   /**
+   * 取一条消息的原始记录，供按 message_id 收藏等场景使用。
+   *
+   * Args:
+   *   messageId (number): OneBot 消息 id。
+   *
+   * Returns:
+   *   Promise<RawMessage | undefined>: 原始消息；取不到时为 undefined。
+   *
+   * Callers:
+   *   - `src/tools/stickers.ts`（qq_collect_message_sticker）。
+   */
+  async rawMessage(messageId: number): Promise<RawMessage | undefined> {
+    return await this.deps.connection.call('get_msg', { message_id: messageId }) as RawMessage | undefined
+  }
+
+  /**
    * Send raw OneBot segments (used by the media tools).
    * @param chatId - target chat.
    * @param segments - outbound segments.

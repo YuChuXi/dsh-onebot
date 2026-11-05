@@ -24,8 +24,9 @@ description: NapCat（OneBot 11）白名单接口的参数与返回、消息段�
 表情保存在插件媒体目录的本地库中，按「表情包 + 摘要」组织，不使用 QQ 收藏体系。发送只认 `pack + summary`，详细描述 `caption` 只用于理解与检索。
 
 - 收：商城表情在入站记录里是 `mface` 段（NapCat 原始的 `image` 段若带 `emoji_id`/`emoji_package_id` 也会归一成 `mface`），带 `summary` 与本地 `file`。重放所需的其余字段由插件随图片保存，既不渲染给模型，也不需要模型搬运。
-- 收藏：`qq_collect_sticker` 的 `pack` 是表情包名，一整套一次传完。每项只需给 `path`（入站段的 `file` 加上系统提示词给出的媒体目录前缀）；插件按随图保存的元数据自动识别商城表情，普通图片另需 `summary` 与 `caption`。
-- 看：`qq_list_stickers` 按 `pack` 列出一套，文本给摘要与详细描述；`preview=true` 额外返回一张 4×4 拼图（一套 16 张，每格 300×300），一次看完整套画面后批量补描述。
+- 收藏：`qq_collect_sticker` 一次收一张，给 `path` 或 `url`；商城表情给 `path` 会自动识别并按表情重放。`pack` 决定归入哪个表情包，省略时为「我的收藏」。普通图片必须给 `summary` 与 `caption`。
+- 快捷收藏：消息只含一张图片或一个表情时，`qq_collect_message_sticker` 直接给 `message_id`（入站记录的 `id` 或历史返回的 `id`），不必先取消息内容。
+- 看：`qq_list_stickers` 按 `pack` 列出一套，文本给摘要与详细描述；`preview` 给数量时额外返回一张总览拼图，`preview_size` 指定每格边长（默认 300，64–1024），`preview_columns` 指定每行格数（默认 4）。
 - 补描述：`qq_remark_sticker` 按 `pack + summary` 批量写 `caption`，`newSummary` 用于改名；文件会随摘要一起改名。
 - 发：`qq_send_sticker` 用 `pack + summary`；全库摘要唯一时可省略 `pack`。摘要按原值精确匹配，直接从 `qq_list_stickers` 复制即可。
 

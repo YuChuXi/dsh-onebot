@@ -1,5 +1,19 @@
 /** 普通图片默认所属的表情包。 */
 export declare const DEFAULT_STICKER_PACK = "\u6211\u7684\u6536\u85CF";
+/**
+ * 校验并取出商城表情五字段；字段缺失或类型不对直接报错。
+ *
+ * Args:
+ *   value (unknown): mface 对象或落盘的元数据。
+ *   action (string): 调用方名称，用于错误信息。
+ *
+ * Returns:
+ *   StickerMark: 完整的五字段。
+ *
+ * Callers:
+ *   - `StickerLibrary.collectPending`、`src/tools/stickers.ts`。
+ */
+export declare function stickerMark(value: unknown, action: string): StickerMark;
 /** 商城表情五字段；摘要同时是表情的定位摘要。 */
 export type StickerMark = {
     summary: string;

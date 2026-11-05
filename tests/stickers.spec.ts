@@ -42,6 +42,23 @@ function makeHarness() {
     call: async (action: string, params: Record<string, unknown>) => {
       calls.push({ action, params })
       if (action === 'send_msg') return { message_id: 42 }
+      if (action === 'get_msg') {
+        if (params.message_id === 2) {
+          return { message: [{ type: 'text', data: { text: 'a' } }, { type: 'text', data: { text: 'b' } }] }
+        }
+        return {
+          message: [{
+            type: 'image',
+            data: {
+              summary: '[飞天猫猫]',
+              url: 'https://cdn.example/m.gif',
+              key: 'k',
+              emoji_id: '8',
+              emoji_package_id: 9,
+            },
+          }],
+        }
+      }
       return {}
     },
   }
@@ -141,51 +158,55 @@ describe('qq_collect_sticker', () => {
     const h = makeHarness()
     const file = await writeImage(h.mediaDir, 'collect.png')
     const result = await h.tool('qq_collect_sticker').execute({
-      items: [{ path: file, summary: '趴鱼', caption: '一条鱼趴在地上流泪，适合表达委屈' }],
-    }, h.exec('s')) as { collected: Array<Record<string, unknown>> }
-    expect(result.collected[0]).toMatchObject({
+      path: file, summary: '趴鱼', caption: '一条鱼趴在地上流泪，适合表达委屈',
+    }, h.exec('s')) as { pack: string; summary: string; caption: string; file: string }
+    expect(result).toMatchObject({
       pack: '我的收藏',
       summary: '趴鱼',
       caption: '一条鱼趴在地上流泪，适合表达委屈',
     })
-    expect(result.collected[0].file).toBe(join(realpathSync(h.mediaDir), 'stickers', '我的收藏', '趴鱼.png'))
+    expect(result.file).toBe(join(realpathSync(h.mediaDir), 'stickers', '我的收藏', '趴鱼.png'))
     expect(h.calls).toEqual([])
   })
 
-  it('普通图片缺摘要或详细描述时整批拒绝', async () => {
+  it('普通图片缺摘要或详细描述时拒绝', async () => {
     const h = makeHarness()
     const file = await writeImage(h.mediaDir, 'a.png')
-    await expect(h.tool('qq_collect_sticker').execute({
-      items: [{ path: file, summary: '有摘要', caption: '有描述' }, { path: file, summary: '缺描述' }],
-    }, h.exec('s'))).rejects.toThrow(/第 2 项 缺少 caption/)
+    await expect(h.tool('qq_collect_sticker').execute({ path: file, summary: '缺描述' }, h.exec('s')))
+      .rejects.toThrow(/缺少 caption/)
     const list = await h.tool('qq_list_stickers').execute({}, {}) as { count: number }
     expect(list.count).toBe(0)
   })
 
-  it('整套商城表情使用固有摘要与指定包名，详细描述可后补', async () => {
+  it('商城表情使用固有摘要与指定包名，详细描述可后补', async () => {
     const h = makeHarness()
-    const result = await h.tool('qq_collect_sticker').execute({
-      pack: '柰子鱼3', items: [{ mface: MFACE }, { mface: MFACE_SECOND }],
-    }, h.exec('s')) as { collected: Array<Record<string, unknown>> }
-    expect(result.collected.map(item => item.summary)).toEqual(['[飞天猫猫]', '[带娃]'])
-    expect(result.collected.map(item => item.pack)).toEqual(['柰子鱼3', '柰子鱼3'])
-    expect(result.collected.map(item => item.caption)).toEqual(['', ''])
-    expect(result.collected[0].mark).toEqual(MFACE)
+    const first = await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE }, h.exec('s')) as {
+      pack: string; summary: string; caption: string; mark: unknown
+    }
+    const second = await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE_SECOND }, h.exec('s')) as {
+      pack: string; summary: string; caption: string
+    }
+    expect([first.summary, second.summary]).toEqual(['[飞天猫猫]', '[带娃]'])
+    expect([first.pack, second.pack]).toEqual(['柰子鱼3', '柰子鱼3'])
+    expect([first.caption, second.caption]).toEqual(['', ''])
+    expect(first.mark).toEqual(MFACE)
   })
 
   it('已认识的商城包按 emoji_package_id 自动复用包名', async () => {
     const h = makeHarness()
-    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', items: [{ mface: MFACE }] }, h.exec('s'))
-    const result = await h.tool('qq_collect_sticker').execute({ items: [{ mface: MFACE_SECOND }] }, h.exec('s')) as {
-      collected: Array<Record<string, unknown>>
+    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE }, h.exec('s'))
+    const second = await h.tool('qq_collect_sticker').execute({ mface: MFACE_SECOND }, h.exec('s')) as {
+      pack: string; summary: string
     }
-    expect(result.collected[0]).toMatchObject({ pack: '柰子鱼3', summary: '[带娃]' })
+    expect(second).toMatchObject({ pack: '柰子鱼3', summary: '[带娃]' })
   })
 
-  it('新商城包缺包名时拒绝', async () => {
+  it('新商城表情省略包名时进入我的收藏', async () => {
     const h = makeHarness()
-    await expect(h.tool('qq_collect_sticker').execute({ items: [{ mface: MFACE }] }, h.exec('s')))
-      .rejects.toThrow(/新商城表情包必须给 pack/)
+    const result = await h.tool('qq_collect_sticker').execute({ mface: MFACE }, h.exec('s')) as {
+      pack: string; summary: string; mark: unknown
+    }
+    expect(result).toMatchObject({ pack: '我的收藏', summary: '[飞天猫猫]', mark: MFACE })
   })
 
   it('同一表情包内同一摘要重复收藏时幂等，保留第一次的图片', async () => {
@@ -193,13 +214,13 @@ describe('qq_collect_sticker', () => {
     const first = await writeImage(h.mediaDir, 'a.png')
     const second = await writeImage(h.mediaDir, 'b.gif', GIF)
     const before = await h.tool('qq_collect_sticker').execute({
-      items: [{ path: first, summary: '重复', caption: '第一张' }],
-    }, h.exec('s')) as { collected: Array<Record<string, unknown>> }
+      path: first, summary: '重复', caption: '第一张',
+    }, h.exec('s')) as { file: string }
     const after = await h.tool('qq_collect_sticker').execute({
-      items: [{ path: second, summary: '重复', caption: '第二张' }],
-    }, h.exec('s')) as { collected: Array<Record<string, unknown>> }
-    expect(after.collected[0].file).toBe(before.collected[0].file)
-    expect(after.collected[0].caption).toBe('第一张')
+      path: second, summary: '重复', caption: '第二张',
+    }, h.exec('s')) as { file: string; caption: string }
+    expect(after.file).toBe(before.file)
+    expect(after.caption).toBe('第一张')
   })
 
   it('入站商城表情按落盘元数据自动识别，模型只给 path', async () => {
@@ -207,36 +228,53 @@ describe('qq_collect_sticker', () => {
     const file = await writeImage(h.mediaDir, 'inbound.gif', GIF)
     await writeFile(file + '.json', JSON.stringify(MFACE))
     const result = await h.tool('qq_collect_sticker').execute({
-      pack: '柰子鱼3', items: [{ path: file }],
-    }, h.exec('s')) as { collected: Array<Record<string, unknown>> }
-    expect(result.collected[0]).toMatchObject({ pack: '柰子鱼3', summary: '[飞天猫猫]', mark: MFACE })
+      pack: '柰子鱼3', path: file,
+    }, h.exec('s')) as { pack: string; summary: string; mark: unknown }
+    expect(result).toMatchObject({ pack: '柰子鱼3', summary: '[飞天猫猫]', mark: MFACE })
   })
 
   it('入站商城表情带已落盘文件收藏：不重新下载，保留五字段', async () => {
     const h = makeHarness()
     const file = await writeImage(h.mediaDir, 'inbound.gif', GIF)
     const result = await h.tool('qq_collect_sticker').execute({
-      pack: '柰子鱼3', items: [{ mface: MFACE, path: file }],
-    }, h.exec('s')) as { collected: Array<Record<string, unknown>> }
-    expect(result.collected[0]).toMatchObject({ pack: '柰子鱼3', summary: '[飞天猫猫]', mark: MFACE })
+      pack: '柰子鱼3', mface: MFACE, path: file,
+    }, h.exec('s')) as { pack: string; summary: string; mark: unknown }
+    expect(result).toMatchObject({ pack: '柰子鱼3', summary: '[飞天猫猫]', mark: MFACE })
     expect(h.downloads).toEqual([])
   })
 
   it('同一张图用不同摘要收藏时各存一份', async () => {
     const h = makeHarness()
     const file = await writeImage(h.mediaDir, 'a.png')
-    await h.tool('qq_collect_sticker').execute({ items: [{ path: file, summary: '开心', caption: '第一次' }] }, h.exec('s'))
-    await h.tool('qq_collect_sticker').execute({ items: [{ path: file, summary: '高兴', caption: '第二次' }] }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ path: file, summary: '开心', caption: '第一次' }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ path: file, summary: '高兴', caption: '第二次' }, h.exec('s'))
     const list = await h.tool('qq_list_stickers').execute({}, {}) as { faces: Array<Record<string, unknown>> }
     expect(list.faces.map(face => face.summary)).toEqual(['开心', '高兴'])
   })
 
   it('越界路径拒绝，不写库', async () => {
     const h = makeHarness()
-    await expect(h.tool('qq_collect_sticker').execute({ items: [{ path: '/etc/passwd', summary: '越界', caption: 'x' }] }, h.exec('s')))
+    await expect(h.tool('qq_collect_sticker').execute({ path: '/etc/passwd', summary: '越界', caption: 'x' }, h.exec('s')))
       .rejects.toThrow(/不在允许的媒体目录内/)
     const list = await h.tool('qq_list_stickers').execute({}, {}) as { count: number }
     expect(list.count).toBe(0)
+  })
+})
+
+describe('qq_collect_message_sticker', () => {
+  it('按 message_id 收藏单段表情，无需路径', async () => {
+    const h = makeHarness()
+    const result = await h.tool('qq_collect_message_sticker').execute({ message_id: 1, pack: '柰子鱼3' }, h.exec('s')) as {
+      pack: string; summary: string; mark: unknown
+    }
+    expect(result).toMatchObject({ pack: '柰子鱼3', summary: '[飞天猫猫]' })
+    expect(result.mark).toMatchObject({ emoji_package_id: '9', key: 'k' })
+  })
+
+  it('多段消息拒绝', async () => {
+    const h = makeHarness()
+    await expect(h.tool('qq_collect_message_sticker').execute({ message_id: 2 }, h.exec('s')))
+      .rejects.toThrow(/只支持单段消息/)
   })
 })
 
@@ -245,7 +283,7 @@ describe('qq_list_stickers', () => {
     const h = makeHarness()
     const file = await writeImage(h.mediaDir, 'a.png')
     await h.tool('qq_collect_sticker').execute({
-      items: [{ path: file, summary: '趴鱼', caption: 'Fish crying on the floor' }],
+      path: file, summary: '趴鱼', caption: 'Fish crying on the floor',
     }, h.exec('s'))
     const result = await h.tool('qq_list_stickers').execute({ pack: '我的收藏', query: 'fish' }, {}) as {
       count: number; faces: Array<Record<string, unknown>>
@@ -256,8 +294,9 @@ describe('qq_list_stickers', () => {
 
   it('整套预览只生成一张 PNG 拼图', async () => {
     const h = makeHarness()
-    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', items: [{ mface: MFACE }, { mface: MFACE_SECOND }] }, h.exec('s'))
-    const result = await h.tool('qq_list_stickers').execute({ pack: '柰子鱼3', preview: true }, {}) as {
+    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE_SECOND }, h.exec('s'))
+    const result = await h.tool('qq_list_stickers').execute({ pack: '柰子鱼3', preview: 2 }, {}) as {
       faces: unknown[]; attachment: Record<string, unknown>
     }
     expect(result.faces).toHaveLength(2)
@@ -270,7 +309,8 @@ describe('qq_list_stickers', () => {
 describe('qq_remark_sticker', () => {
   it('整套批量补写详细描述并保留各自摘要', async () => {
     const h = makeHarness()
-    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', items: [{ mface: MFACE }, { mface: MFACE_SECOND }] }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE_SECOND }, h.exec('s'))
     await h.tool('qq_remark_sticker').execute({ items: [
       { pack: '柰子鱼3', summary: '[飞天猫猫]', caption: '角色被蓝色尾巴带着飞起，开心大笑' },
       { pack: '柰子鱼3', summary: '[带娃]', caption: '大角色头顶小角色，周围有黄色星星' },
@@ -284,7 +324,7 @@ describe('qq_remark_sticker', () => {
 
   it('可按 pack+summary 改名并保留详细描述', async () => {
     const h = makeHarness()
-    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', items: [{ mface: MFACE, caption: '在飞' }] }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE, caption: '在飞' }, h.exec('s'))
     await h.tool('qq_remark_sticker').execute({ items: [
       { pack: '柰子鱼3', summary: '[飞天猫猫]', newSummary: '[飞天猫]' },
     ] }, {})
@@ -294,7 +334,8 @@ describe('qq_remark_sticker', () => {
 
   it('批量修改产生重复摘要时整批拒绝', async () => {
     const h = makeHarness()
-    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', items: [{ mface: MFACE }, { mface: MFACE_SECOND }] }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE_SECOND }, h.exec('s'))
     await expect(h.tool('qq_remark_sticker').execute({ items: [
       { pack: '柰子鱼3', summary: '[飞天猫猫]', newSummary: '相同' },
       { pack: '柰子鱼3', summary: '[带娃]', newSummary: '相同' },
@@ -305,7 +346,7 @@ describe('qq_remark_sticker', () => {
 
   it('摘要不存在时拒绝', async () => {
     const h = makeHarness()
-    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', items: [{ mface: MFACE }] }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE }, h.exec('s'))
     await expect(h.tool('qq_remark_sticker').execute({ items: [
       { pack: '柰子鱼3', summary: '不存在', caption: 'x' },
     ] }, {})).rejects.toThrow(/没有摘要/)
@@ -316,7 +357,7 @@ describe('qq_send_sticker', () => {
   it('按表情包加摘要发送普通图片', async () => {
     const h = makeHarness()
     const file = await writeImage(h.mediaDir, 'a.png')
-    await h.tool('qq_collect_sticker').execute({ items: [{ path: file, summary: '趴鱼', caption: '很长的详细描述' }] }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ path: file, summary: '趴鱼', caption: '很长的详细描述' }, h.exec('s'))
     await h.tool('qq_send_sticker').execute({ pack: '我的收藏', summary: '趴鱼', chat_id: 'private:10001' }, h.exec('s'))
     expect(h.sent().message).toEqual([{ type: 'image', data: { file: 'base64://' + PNG.toString('base64'), sub_type: 1 } }])
   })
@@ -324,7 +365,7 @@ describe('qq_send_sticker', () => {
   it('详细描述不是发送定位字段', async () => {
     const h = makeHarness()
     const file = await writeImage(h.mediaDir, 'a.png')
-    await h.tool('qq_collect_sticker').execute({ items: [{ path: file, summary: '趴鱼', caption: '很长的详细描述' }] }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ path: file, summary: '趴鱼', caption: '很长的详细描述' }, h.exec('s'))
     await expect(h.tool('qq_send_sticker').execute({ summary: '很长的详细描述', chat_id: 'private:10001' }, h.exec('s')))
       .rejects.toThrow(/没有摘要/)
   })
@@ -332,29 +373,29 @@ describe('qq_send_sticker', () => {
   it('同摘要跨包存在时要求给表情包', async () => {
     const h = makeHarness()
     const file = await writeImage(h.mediaDir, 'a.png')
-    await h.tool('qq_collect_sticker').execute({ pack: '甲', items: [{ path: file, summary: '开心', caption: '甲包' }] }, h.exec('s'))
-    await h.tool('qq_collect_sticker').execute({ pack: '乙', items: [{ path: file, summary: '开心', caption: '乙包' }] }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ pack: '甲', path: file, summary: '开心', caption: '甲包' }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ pack: '乙', path: file, summary: '开心', caption: '乙包' }, h.exec('s'))
     await expect(h.tool('qq_send_sticker').execute({ summary: '开心', chat_id: 'private:10001' }, h.exec('s')))
       .rejects.toThrow(/请给 pack：甲、乙/)
   })
 
   it('按表情包加摘要重放商城五字段', async () => {
     const h = makeHarness()
-    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', items: [{ mface: MFACE }] }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE }, h.exec('s'))
     await h.tool('qq_send_sticker').execute({ pack: '柰子鱼3', summary: '[飞天猫猫]', chat_id: 'private:10001' }, h.exec('s'))
     expect(h.sent().message).toEqual([{ type: 'mface', data: MFACE }])
   })
 
   it('摘要按固有原值精确定位，缺少方括号时不命中', async () => {
     const h = makeHarness()
-    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', items: [{ mface: MFACE }] }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE }, h.exec('s'))
     await expect(h.tool('qq_send_sticker').execute({ pack: '柰子鱼3', summary: '飞天猫猫', chat_id: 'private:10001' }, h.exec('s')))
       .rejects.toThrow(/没有摘要/)
   })
 
   it('按表情包加摘要发送商城表情；省略包名时按全库唯一摘要命中', async () => {
     const h = makeHarness()
-    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', items: [{ mface: MFACE }] }, h.exec('s'))
+    await h.tool('qq_collect_sticker').execute({ pack: '柰子鱼3', mface: MFACE }, h.exec('s'))
     await h.tool('qq_send_sticker').execute({ summary: '[飞天猫猫]', chat_id: 'private:10001' }, h.exec('s'))
     expect(h.sent().message).toEqual([{ type: 'mface', data: MFACE }])
   })
