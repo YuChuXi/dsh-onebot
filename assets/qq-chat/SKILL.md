@@ -21,14 +21,13 @@ description: NapCat（OneBot 11）白名单接口的参数与返回、消息段�
 
 ## 表情
 
-表情保存在插件媒体目录的本地库中，不使用 QQ 收藏体系：
+表情保存在插件媒体目录的本地库中，按「表情包 + 摘要」组织，不使用 QQ 收藏体系。发送只认 `pack + summary`，详细描述 `caption` 只用于理解与检索。
 
-- `qq_collect_sticker`：批量收藏，`items` 每项给 `path`（媒体目录内）、`url` 或 `mface` 五字段之一，`name` 必填且写清图像描述（日后靠它检索）；整套商城表情一次传入。
-- `qq_list_stickers`：`query` 按描述做子串检索；`preview` 把命中结果的前 N 张图片交给模型查看。
-- `qq_send_sticker`：按序号、图像描述、本地路径、URL 或商城表情五字段发送；描述精确匹配优先，命中多张时改用序号。
-- `qq_remark_sticker`：修改图像描述。
-
-商城表情在消息记录里是 `mface` 段，带 `summary`、`emoji_id`、`emoji_package_id`、`key`、`url` 与本地文件 `file`；原样传入 `mface` 即可收藏或重放。
+- 收：入站 `mface` 段带 `summary`、`emoji_id`、`emoji_package_id`、`key`、`url` 与本地文件 `file`。收藏时把该段原样作为 `mface` 传入，并同时给 `path`（段里的 `file`），复用已落盘的字节；不传 `path` 时按 `url` 下载，`url` 过期会失败。
+- 收藏：`qq_collect_sticker` 的 `pack` 是表情包名，一整套一次传完。商城表情的摘要直接取固有 `summary` 原值（含方括号，如 `[飞天猫猫]`）；普通图片必须给 `summary`（定位用短摘要）与 `caption`（画面、情绪、语境的详细描述），默认进「我的收藏」。
+- 看：`qq_list_stickers` 按 `pack` 列出一套，文本给摘要与详细描述；`preview=true` 额外返回一张 4×4 拼图（一套 16 张，每格 300×300），一次看完整套画面后批量补描述。
+- 补描述：`qq_remark_sticker` 按 `pack + summary` 批量写 `caption`，`newSummary` 用于改名。
+- 发：`qq_send_sticker` 用 `pack + summary`；全库摘要唯一时可省略 `pack`。摘要按原值精确匹配，直接从 `qq_list_stickers` 复制即可。
 
 经典表情（`face` 段）的 id 与中文名对照见 `references/faces.md`。
 

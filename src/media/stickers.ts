@@ -121,6 +121,9 @@ export class StickerLibrary {
       const md5 = createHash('md5').update(data).digest('hex')
       const existing = records.find(record => record.pack === source.pack && record.md5 === md5)
       if (existing !== undefined) {
+        if (existing.summary !== source.summary) {
+          throw new Error('表情库：表情包「' + source.pack + '」已收录这张图，摘要为「' + existing.summary + '」；改名请用备注工具')
+        }
         results.push({ ...existing })
         continue
       }
@@ -184,8 +187,7 @@ export class StickerLibrary {
     }
     await this.writeIndex(next)
     return changes.map(change => {
-      const record = next.find(item => item.pack === change.pack &&
-        item.summary === (change.newSummary ?? change.summary))
+      const record = next.find(item => item.pack === change.pack && item.summary === (change.newSummary ?? change.summary))
       if (record === undefined) throw new Error('表情库：修改结果丢失')
       return { ...record }
     })

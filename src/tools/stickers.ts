@@ -16,7 +16,8 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 
 import type { ChatBridge } from '../bridge/index.js'
 import {
-  DEFAULT_STICKER_PACK, type StickerChange, type StickerLibrary, type StickerMark, type StickerRecord, type StickerSource,
+  DEFAULT_STICKER_PACK, type StickerChange, type StickerLibrary, type StickerMark,
+  type StickerRecord, type StickerSource,
 } from '../media/stickers.js'
 import { isUrl, resolveContainedPath } from '../media/store.js'
 import { normalizeSegment } from '../onebot/segments.js'
@@ -75,24 +76,6 @@ type StickerList = {
 }
 
 /**
- * 把商城 summary 归一为定位摘要，只去掉 QQ 固有的一对方括号。
- *
- * Args:
- *   summary (string): 商城表情固有摘要。
- *
- * Returns:
- *   string: 用于显示与定位的简短摘要。
- *
- * Callers:
- *   - `collectSources`。
- */
-function marketSummary(summary: string): string {
-  const trimmed = summary.trim()
-  const match = /^\[(.+)\]$/.exec(trimmed)
-  return (match?.[1] ?? trimmed).trim()
-}
-
-/**
  * 校验并取出商城表情五字段；缺字段直接报错。
  *
  * Args:
@@ -133,8 +116,7 @@ function stickerMark(value: unknown, action: string): StickerMark {
  *   - `stickerSegment`。
  */
 function pickSticker(records: StickerRecord[], pack: string, summary: string): StickerRecord {
-  const target = summary.toLowerCase()
-  const pool = records.filter(record => (pack === '' || record.pack === pack) && record.summary.toLowerCase() === target)
+  const pool = records.filter(record => (pack === '' || record.pack === pack) && record.summary === summary)
   if (pool.length === 1) return pool[0]
   if (pool.length === 0) {
     const location = pack === '' ? '表情库' : '表情包「' + pack + '」'
@@ -331,8 +313,10 @@ async function collectSources(
     const path = typeof entry.path === 'string' ? entry.path : ''
     const url = typeof entry.url === 'string' ? entry.url : ''
     const hasMface = entry.mface !== undefined && entry.mface !== null
-    if ([path !== '', url !== '', hasMface].filter(Boolean).length !== 1) {
-      throw new Error(label + ': path / url / mface 需要且只能给一个')
+    if (hasMface) {
+      if (url !== '') throw new Error(label + ': mface 已含 url，不要再单独给 url')
+    } else if ((path !== '') === (url !== '')) {
+      throw new Error(label + ': path / url 需要且只能给一个')
     }
     const caption = typeof entry.caption === 'string' ? entry.caption.trim() : ''
     let file = ''
@@ -342,7 +326,7 @@ async function collectSources(
     if (hasMface) {
       mark = stickerMark(entry.mface, label)
       if (!isUrl(mark.url)) throw new Error(label + ': mface.url 不是 http(s) 地址')
-      summary = marketSummary(mark.summary)
+      summary = mark.summary.trim()
       if (summary === '') throw new Error(label + ': 商城表情 summary 为空')
       if (pack === '') {
         const packs = [...new Set(records.filter(record => record.mark?.emoji_package_id === mark?.emoji_package_id).map(record => record.pack))]
@@ -350,7 +334,13 @@ async function collectSources(
         else if (packs.length > 1) throw new Error(label + ': emoji_package_id 对应多个表情包，请显式给 pack')
       }
       if (pack === '') throw new Error(label + ': 新商城表情包必须给 pack（例如「柰子鱼3」）')
-      file = await bridge.saveSticker(mark.url)
+      if (path !== '') {
+        const resolved = await resolveContainedPath(roots, path)
+        if (resolved === null) throw new Error(label + ': path 不在允许的媒体目录内')
+        file = resolved
+      } else {
+        file = await bridge.saveSticker(mark.url)
+      }
     } else {
       if (summary === '') throw new Error(label + ' 缺少 summary（普通图片需要简短摘要）')
       if (caption === '') throw new Error(label + ' 缺少 caption（普通图片需要详细描述）')
@@ -479,7 +469,7 @@ export function registerStickerTools(
       items: {
         type: 'array',
         required: true,
-        description: '普通项：{path 或 url, summary, caption}；商城项：{mface, caption?}。caption 是详细描述，summary 是定位摘要',
+        description: '普通项：{path 或 url, summary, caption}；商城项：{mface, path?, caption?}，path 给入站段已落盘的文件可免去重新下载。caption 是详细描述，summary 是定位摘要',
         items: { type: 'object', additionalProperties: true },
       },
     },
