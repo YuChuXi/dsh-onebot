@@ -65,7 +65,7 @@ describe('parseMessage', () => {
     expect(parsed.segments[0]).toMatchObject({ type: 'mface', data: { summary: '[x]', url: 'not-a-url' } })
   })
 
-  it('keeps market-sticker fields carried by an image segment', () => {
+  it('normalizes a market sticker carried by an image segment into mface', () => {
     const parsed = parseMessage([{
       type: 'image',
       data: {
@@ -77,8 +77,18 @@ describe('parseMessage', () => {
         emoji_package_id: 241895,
       },
     }])
+    expect(parsed.segments[0]).toEqual({
+      type: 'mface',
+      data: {
+        summary: '[飞天猫猫]',
+        url: 'https://gxh.vip/raw300.gif',
+        key: 'd9b8f42a008893aa',
+        emoji_id: 'f649853bda4e4d1f0e76c535aad2cd4f',
+        emoji_package_id: '241895',
+      },
+    })
     expect(parsed.media[0]).toMatchObject({
-      kind: 'image',
+      kind: 'sticker',
       summary: '[飞天猫猫]',
       mface: {
         summary: '[飞天猫猫]',
@@ -89,7 +99,7 @@ describe('parseMessage', () => {
       },
     })
     // 五字段留在引用里供落盘与重放，渲染给模型的段只带文件与摘要。
-    const resolved = MEDIA_KINDS.image.resolved(parsed.media[0], 'media/x.gif')
+    const resolved = MEDIA_KINDS.sticker.resolved(parsed.media[0], 'media/x.gif')
     expect(resolved).toMatchObject({ file: 'media/x.gif', summary: '[飞天猫猫]' })
     expect(resolved).not.toHaveProperty('emoji_id')
     expect(resolved).not.toHaveProperty('key')

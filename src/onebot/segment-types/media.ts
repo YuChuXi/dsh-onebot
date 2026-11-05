@@ -8,8 +8,9 @@ import { mediaKindOf, mediaLabel } from '../../media/kinds.js'
 import { encodeLocalFile, isLocalPath } from '../../media/local.js'
 import { isUrl } from '../../media/store.js'
 import type { OutboundSegment } from '../../outbound/index.js'
-import type { Segment } from '../segments.js'
-import { pickFields } from './primitives.js'
+import type { IncomingSegment, Segment, SegmentData } from '../segments.js'
+import { MFACE_FIELDS } from './mface.js'
+import { pickFields, scalar, text } from './primitives.js'
 import { registerSegmentType, type SegmentSendContext } from './registry.js'
 
 /** 媒体段携带的来源属性。 */
@@ -60,7 +61,18 @@ async function normalizeMedia(
 
 for (const type of Object.keys(LIMIT) as LocalMediaSegment[]) {
   registerSegmentType(type, {
-    segment: (): Segment => ({ type, data: {} }) as Segment,
+    // QQ 把商城表情包装成 image 段，五字段挂在 data 上；这里归一成 mface，
+    // 模型才能直接看出这是表情而不是普通图片。
+    segment: (raw: IncomingSegment): Segment => {
+      if (type === 'image' &&
+          (text(raw.data?.emoji_id) !== undefined || scalar(raw.data?.emoji_package_id) !== undefined)) {
+        const picked = pickFields(raw.data ?? {}, MFACE_FIELDS)
+        // NapCat 把 emoji_package_id 当数字给，mface 段统一用字符串。
+        if (picked.emoji_package_id !== undefined) picked.emoji_package_id = String(picked.emoji_package_id)
+        return { type: 'mface', data: picked as SegmentData['mface'] }
+      }
+      return { type, data: {} } as Segment
+    },
     render: segment => {
       const kind = mediaKindOf(segment)
       const file = (segment.data as { file?: unknown }).file

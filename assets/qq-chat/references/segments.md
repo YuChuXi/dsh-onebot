@@ -7,13 +7,13 @@
 | type | data 字段 | 说明 |
 |---|---|---|
 | `text` | `text` | 纯文本 |
-| `image` | `file`（媒体目录内的文件名）, `sub_type?`, `summary?` | `sub_type=1` 是表情包；商城表情的重放字段由插件随文件保存，不出现在这里 |
+| `image` | `file`（媒体目录内的文件名）, `sub_type?`, `summary?` | `sub_type=1` 是表情包；带 `emoji_id`/`emoji_package_id` 的 image 段会归一成 `mface` |
 | `record` | `file`（媒体目录内的文件名）, `sub_type?`, `summary?` | 语音；入站先给段，转写完成后以补充指令到达 |
 | `video` | `file`（媒体目录内的文件名）, `sub_type?`, `summary?` | 短视频 |
 | `file` | `file`（媒体目录内的文件名）, `name?`, `file_id?` | 群/私聊文件 |
 | `at` | `qq`, `name?` | `qq=all` 是 @全体 |
 | `face` | `id`, `name?` | QQ 经典表情，id 表见 `faces.md` |
-| `mface` | `summary`, `emoji_id`, `emoji_package_id`, `key`, `url`, `file`（媒体目录内的文件名） | 商城表情；`summary` 是 QQ 固有摘要，形如 `[飞天猫猫]`，原样保留用于重放 |
+| `mface` | `summary`, `emoji_id`, `emoji_package_id`, `key`, `url`, `file`（媒体目录内的文件名） | 商城表情；入站回填后模型只看到 `file` 与 `summary`，重放字段由插件保存 |
 | `reply` | `id`；展开后另带被引消息的记录字段 | 引用；展开层级由 `quoteExpandDepth` 控制，0 = 只保留 id |
 | `forward` | `id`, `resId?`, `messages?` | 合并转发；展开后 `messages` 是节点数组，层级由 `forwardExpandDepth` 控制，单次条数由 `forwardExpandCount` 控制 |
 | `node` | `id?`, `user_id`, `nickname`, `content`, `time?` | 合并转发节点 |
