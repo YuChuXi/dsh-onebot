@@ -7,15 +7,15 @@
 | type | data 字段 | 说明 |
 |---|---|---|
 | `text` | `text` | 纯文本 |
-| `image` | `file`（本机路径）, `sub_type?`, `summary?` | `sub_type=1` 是表情包；`summary` 是 QQ 自带的说明 |
-| `record` | `file`（本机路径）, `sub_type?`, `summary?` | 语音；入站先给段，转写完成后以补充指令到达 |
-| `video` | `file`（本机路径）, `sub_type?`, `summary?` | 短视频 |
-| `file` | `file`（本机路径）, `name?`, `file_id?` | 群/私聊文件 |
+| `image` | `file`（媒体目录内的文件名）, `sub_type?`, `summary?` | `sub_type=1` 是表情包；`summary` 是 QQ 自带的说明 |
+| `record` | `file`（媒体目录内的文件名）, `sub_type?`, `summary?` | 语音；入站先给段，转写完成后以补充指令到达 |
+| `video` | `file`（媒体目录内的文件名）, `sub_type?`, `summary?` | 短视频 |
+| `file` | `file`（媒体目录内的文件名）, `name?`, `file_id?` | 群/私聊文件 |
 | `at` | `qq`, `name?` | `qq=all` 是 @全体 |
 | `face` | `id`, `name?` | QQ 经典表情，id 表见 `faces.md` |
 | `mface` | `summary`, `emoji_id`, `emoji_package_id`, `key`, `url` | 商城表情 |
-| `reply` | `id`；展开后另带被引消息的记录字段 | 引用 |
-| `forward` | `id`, `resId?`, `messages?` | 合并转发；展开后 `messages` 是节点数组 |
+| `reply` | `id`；展开后另带被引消息的记录字段 | 引用；展开层级由 `quoteExpandDepth` 控制，0 = 只保留 id |
+| `forward` | `id`, `resId?`, `messages?` | 合并转发；展开后 `messages` 是节点数组，层级由 `forwardExpandDepth` 控制，单次条数由 `forwardExpandCount` 控制 |
 | `node` | `id?`, `user_id`, `nickname`, `content`, `time?` | 合并转发节点 |
 | `dice` / `rps` | `result?` | 骰子 / 猜拳 |
 | `json` / `xml` | `data` | 卡片消息 |
@@ -28,7 +28,7 @@
 | `cardimage` | `file` | 卡片图片 |
 | `unknown` | 原始 data + `$type` | 未识别的段，`$type` 是原始类型名 |
 
-入站媒体段的 `file` 已经是本机路径，字节由插件下载并落到本机临时目录，默认 6 小时后清理；需要长期引用先转存。原始段里的腾讯 CDN `url` 已被丢弃，不要指望它在入站记录里出现。取不到字节时整个段会被替换成文本 `(图片未取到)`／`(语音未取到)` 这类占位。
+入站媒体段的 `file` 是媒体目录内的文件名，完整路径前缀由系统提示词给出；字节由插件下载并落到本机临时目录，默认 6 小时后清理，需要长期引用先转存。原始段里的腾讯 CDN `url` 已被丢弃，不要指望它在入站记录里出现。取不到字节时整个段会被替换成文本 `(图片未取到)`／`(语音未取到)` 这类占位。把入站段原样回传给发送工具时，需要把 `file` 拼上系统提示词给出的媒体目录前缀。
 
 ## 出站
 

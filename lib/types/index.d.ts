@@ -124,6 +124,12 @@ export interface Config {
     outboundIntervalJitterPct: number;
     /** 每次 @ 注入的记录总条数（含触发消息）；0 = 只注入触发消息。 */
     recentMessages: number;
+    /** 引用的自动展开层级；0 = 不展开。 */
+    quoteExpandDepth: number;
+    /** 合并转发的自动展开层级；0 = 不展开。 */
+    forwardExpandDepth: number;
+    /** 合并转发单次展开的消息条数上限；外层余额按内层转发数量均分。 */
+    forwardExpandCount: number;
     sleepMode: 'window' | 'peak';
     sleepStart: string;
     sleepEnd: string;

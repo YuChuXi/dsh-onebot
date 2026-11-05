@@ -57,10 +57,10 @@ import { parseModelRoute, type ModelRoute } from './bridge/model-route.js'
 export const ENTRY_ID = 'dsh-onebot'
 /** Typert Remote 命名空间 = cordis 服务键（T1 §4）。 */
 export const NAMESPACE = 'onebotSettings'
-/** 快照固定值：36 键均为插件级热重启生效（T1 §5）。 */
+/** 快照固定值：39 键均为插件级热重启生效（T1 §5）。 */
 export const REMOTE_EFFECT = 'restart'
 
-/** 设置页 UI 六组 36 键（与 src/index.ts Config schema 的 Config 面向面板的键一一对应）。
+/** 设置页 UI 六组 39 键（与 src/index.ts Config schema 的 Config 面向面板的键一一对应）。
  *  connection 是连接面；private/group 是两个大块——各自收纳该会话类型的模型、思考强度、
  *  附加提示词与准入（策略/白名单）；permissions 只剩对两种会话同时生效的管理员与总开关；
  *  behavior 收纳全部会话共用的回复/节流/休眠；diagnostics 收纳观测/调试开关——它们默认关、
@@ -70,7 +70,7 @@ export const SETTINGS_GROUPS: Readonly<Record<string, readonly string[]>> = {
   private: ['modelPrivate', 'thinkingPrivate', 'extraPromptPrivate', 'dmPolicy', 'allowFrom'],
   group: ['modelGroup', 'thinkingGroup', 'extraPromptGroup', 'requireMention', 'groupPolicy', 'groupAllowFrom'],
   permissions: ['adminUsers', 'allowAllUsers'],
-  behavior: ['sendErrorNotice', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages', 'steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'sleepMode', 'sleepStart', 'sleepEnd'],
+  behavior: ['sendErrorNotice', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages', 'quoteExpandDepth', 'forwardExpandDepth', 'forwardExpandCount', 'steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'sleepMode', 'sleepStart', 'sleepEnd'],
   diagnostics: ['traceEnabled', 'recordInbound', 'inboxRedact', 'injectEnabled', 'injectDryRun'],
 }
 
@@ -98,6 +98,10 @@ export const SCHEMA_DEFAULTS: Readonly<Record<string, unknown>> = {
   outboundIntervalJitterPct: 30,
   // 注入上文窗口的记录总条数（含触发消息；0 = 只注入触发消息）。
   recentMessages: 50,
+  // 引用/合并转发展开：层级默认 0（只保留 id），转发单次条数默认 20。
+  quoteExpandDepth: 0,
+  forwardExpandDepth: 0,
+  forwardExpandCount: 20,
   // 休眠：每日时段（window）或高峰时段（peak），时段留空 = 不启用。
   sleepMode: 'window',
   sleepStart: '',
@@ -137,7 +141,10 @@ const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
   thinkingPrivate: THINKING_LEVELS,
   thinkingGroup: THINKING_LEVELS,
 }
-const NUMBER_KEYS: readonly string[] = ['port', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages']
+const NUMBER_KEYS: readonly string[] = [
+  'port', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages',
+  'quoteExpandDepth', 'forwardExpandDepth', 'forwardExpandCount',
+]
 /** 数字键取值范围（port 1–65535、间隔 ≥0；越界在 Remote 层拒绝）。 */
 const NUMBER_RANGE: Readonly<Record<string, readonly [number, number | undefined]>> = {
   port: [1, 65535],
@@ -145,6 +152,9 @@ const NUMBER_RANGE: Readonly<Record<string, readonly [number, number | undefined
   outboundIntervalPerCharMs: [0, undefined],
   outboundIntervalJitterPct: [0, 100],
   recentMessages: [0, 100],
+  quoteExpandDepth: [0, undefined],
+  forwardExpandDepth: [0, undefined],
+  forwardExpandCount: [1, undefined],
 }
 /** 布尔键白名单（顺序对齐 SETTINGS_GROUPS 中 behavior 与 diagnostics 的键序）。
  *  调优数值键（dedupWindowSeconds、injectIntervalMs）与枚举键 traceLevel 不入
@@ -156,7 +166,7 @@ const BOOLEAN_KEYS: readonly string[] = [
 ]
 const STRING_KEYS: readonly string[] = ['host', 'url', 'accessToken', 'botQQ', 'workspacePath', 'sleepStart', 'sleepEnd', 'extraPromptPrivate', 'extraPromptGroup', 'modelPrivate', 'modelGroup']
 const STRING_ARRAY_KEYS: readonly string[] = ['adminUsers', 'allowFrom', 'groupAllowFrom']
-/** 全部 36 键（校验与快照的唯一键集；6 枚举 + 5 数字 + 11 布尔 + 11 字符串 + 3 字符串数组）。 */
+/** 全部 39 键（校验与快照的唯一键集；6 枚举 + 8 数字 + 11 布尔 + 11 字符串 + 3 字符串数组）。 */
 export const ALL_KEYS: readonly string[] = [
   ...Object.keys(ENUM_KEYS), ...NUMBER_KEYS, ...BOOLEAN_KEYS, ...STRING_KEYS, ...STRING_ARRAY_KEYS,
 ]
@@ -167,7 +177,7 @@ export interface OnebotSettingsSnapshot {
   revision: number
   /** dsh-onebot 条目 fiber 是否 active（fiber.state === 2，同 configEditor.edit 的活性判据）。 */
   entryActive: boolean
-  /** 36 键生效值；accessToken 脱敏为 ''。 */
+  /** 39 键生效值；accessToken 脱敏为 ''。 */
   config: Record<string, unknown>
   /** 动态下拉选项（按宿主模型能力）；缺席的键由客户端用静态选项。 */
   choices?: Record<string, string[]>
@@ -379,7 +389,7 @@ function resolveWorkspaceRegistry(ctx: { get(key: string): unknown } | undefined
   return registry !== undefined && registry !== null && typeof registry.list === 'function' ? registry : undefined
 }
 
-/** 33 键生效值 = schema 默认值 ← 条目 config 覆盖（T1 §3 合并优先级一句话）。 */
+/** 39 键生效值 = schema 默认值 ← 条目 config 覆盖（T1 §3 合并优先级一句话）。 */
 export function effectiveConfig(raw: Record<string, unknown>): Record<string, unknown> {
   const effective: Record<string, unknown> = {}
   for (const key of ALL_KEYS) {
@@ -408,7 +418,7 @@ function buildSnapshot(entry: ConfigEditorEntry, state: RevisionState): OnebotSe
   }
 }
 
-/** updateSettings 入参校验（T1 §4：33 键的任意子集，扁平 JSON）。未知键整单
+/** updateSettings 入参校验（T1 §4：39 键的任意子集，扁平 JSON）。未知键整单
  *  拒绝（不静默丢弃）；类型/枚举不符拒绝；具体取值合法性交由宿主 schemastery
  *  校验 + reconcile 失败自动回滚兜底（T1 §5）。 */
 export function validatePatch(patch: unknown): Record<string, unknown> {

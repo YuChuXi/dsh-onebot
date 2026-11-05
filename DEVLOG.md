@@ -917,3 +917,12 @@ docker restart 会丢登录态（需重新扫码/QCE 登录）
 - **验证**：`npm run build`（scripts/build.sh，tsc 5.9.3，宿主 node_modules 0.2.2-alpha.2）重建 lib/ 成功；`npx tsc -p tsconfig.json --noEmit` 0 错误；全量 vitest 40 文件 / 625 用例一次全绿（本轮无 flake）；lib import 冒烟（node ESM import lib/index.js）可加载、导出 8 个顶层符号非空。
 - **清单同步**：package.json version 0.9.7→0.9.8；dsh.plugin.json 同步 0.9.8；tests/commands.spec.ts packageVersion 断言随版更新为 0.9.8（it 描述串 + expect 两行，仿 0.9.3–0.9.7 先例）；package-lock.json 沿用既有惯例不动。
 - **发布面收口**：commit（含 lib/）→ push origin main → tag `v0.9.8` → GitHub Release → npm publish → npmmirror 验证。宿主进程未重启。
+
+## 2026-11-05 入站消息渲染：引用/转发分层展开与媒体路径前缀收敛
+
+- **配置**：新增 `quoteExpandDepth`、`forwardExpandDepth`（默认 0 = 不展开，段里只保留 id）与 `forwardExpandCount`（默认 20）。引用与转发各自使用独立层级；转发节点内的引用/转发按各自剩余层级继续处理。
+- **转发展开**：`expandForward` 先按 `forwardExpandCount` 展开外层节点；外层实际节点数不足时，剩余额度按本层内层转发数量均分，内层再按各自额度递归展开。外层额度用满时内层转发保留 id。
+- **媒体路径**：`fillMediaSegments` 在构造记录时直接写入媒体目录内的文件名（`mediaDisplayPath`），完整本机路径不再进入模型载荷；`buildPlatformPrompt` 增加媒体目录参数并声明 `file` 的完整路径拼法；语音转写经 `mediaFilePath` 还原绝对路径。
+- **验证**：`tsc -p tsconfig.json --noEmit` 0 错误；全量 vitest 34 文件 / 453 用例全绿（线程池执行）；`tsc -p tsconfig.json` 重建 lib/ 与类型声明。
+- **设置页**：三个新键接入「行为」组（host `SETTINGS_GROUPS` / `SCHEMA_DEFAULTS` / `NUMBER_KEYS` 与 `lib/client.js` 字段定义、默认值、config/patch schema、数字范围同步），面板键数 36→39；`quoteExpandDepth` / `forwardExpandDepth` 范围 ≥0，`forwardExpandCount` ≥1。
+- **边界**：未发版、未 bump 版本号。

@@ -222,7 +222,7 @@ describe('ChatBridge', () => {
   })
 
   it('inbound pipeline order: policy gate → mention gate → command router → media → quote → dispatch (M2-T0 pipeline)', async () => {
-    const h = await makeCmdHarness()
+    const h = await makeCmdHarness({ quoteExpandDepth: 1 })
     const order: string[] = []
     const target = h.bridge as unknown as {
       tryHandleCommand(chatId: string, text: string, userId: string): Promise<boolean>

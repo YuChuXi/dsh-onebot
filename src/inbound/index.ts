@@ -8,14 +8,15 @@
  *
  * 载荷是记录数组而不是一段拼接文本：真人消息是 `{qq, nickname, id, time,
  * role?, message}`，系统事件是 `{notice, time?, …OneBot 原始字段}`；媒体段带
- * 本机路径，引用与合并转发在原位置展开成记录。窗口水位 `{time, id}` 随会话
- * 映射持久化：注入过的消息不会再注入一次。
+ * 媒体目录内的文件名，引用与合并转发按配置的层级与条数在原位置展开成记录。
+ * 窗口水位 `{time, id}` 随会话映射持久化：注入过的消息不会再注入一次。
  * @module dsh-onebot/inbound
  */
 import { stat, writeFile } from 'node:fs/promises'
+import { isAbsolute, join } from 'node:path'
 
 import type { OneBotEvent } from '../onebot/connection.js'
-import { extForInboundName } from '../media/store.js'
+import { extForInboundName, mediaDisplayPath } from '../media/store.js'
 import type { MediaStore } from '../media/store.js'
 import type { Transcriber } from '../media/stt.js'
 import { transcriptLabel } from '../media/stt.js'
@@ -38,6 +39,8 @@ import { currentTrace, TRACE_REASONS } from '../ops/trace.js'
 
 /** W2-② 去重窗口的默认秒数，与 MIT 竞品的 dedupWindowSeconds 对齐。 */
 export const DEFAULT_DEDUP_WINDOW_SECONDS = 300
+/** 合并转发单次展开的消息条数上限默认值；层级由 forwardExpandDepth 控制。 */
+export const DEFAULT_FORWARD_EXPAND_COUNT = 20
 /** W2-② 去重窗口映射的条目上限（LRU 淘汰），防止 message_id 洪水撑爆内存。 */
 export const DEDUP_MAX_ENTRIES = 4096
 /** 群成员表缓存有效期：@ 名字富集不必每条消息都拉一次。 */
@@ -81,6 +84,12 @@ export interface InboundContext {
     dedupWindowSeconds: number
     /** 上文窗口条数上限（含触发消息）；0 = 只注入触发消息。 */
     recentMessages: number
+    /** 引用的自动展开层级；0 = 不展开。 */
+    quoteExpandDepth: number
+    /** 合并转发的自动展开层级；0 = 不展开。 */
+    forwardExpandDepth: number
+    /** 合并转发单次展开的消息条数上限；外层余额按内层转发数量均分。 */
+    forwardExpandCount: number
     /** 休眠模式：window（每日窗口）/ peak（高峰时段）。 */
     sleepMode: string
     /** 休眠窗口起点 HH:MM。 */
@@ -378,8 +387,8 @@ export class InboundPipeline {
   }
 
   /**
-   * 一条消息 → 一条记录，没有例外：触发消息、窗口行、被引消息、转发节点
-   * 都走这里，只有它构造记录。媒体换成本机路径，@ 补名字，引用/转发展开。
+   * 一条消息 → 一条记录，没有例外：触发消息、窗口行都走这里，只有它构造记录。
+   * 媒体换成媒体目录内的文件名，@ 补名字，引用/转发按配置的层级展开。
    *
    * Args:
    *   message (RawMessage): OneBot 消息对象。
@@ -389,12 +398,18 @@ export class InboundPipeline {
    *   MessageRecord: 记录。
    *
    * Callers:
-   *   - `processInbound`、`sleepTurn`、`expandQuote`、`expandForward`。
+   *   - `processInbound`、`sleepTurn`、`wakeWithNote`。
    */
   async recordOf(message: RawMessage, chatId: ChatId): Promise<MessageRecord> {
     const parsed = this.parseOf(message)
     const normalized = await this.normalizedSegments(parsed, chatId)
-    const segments = await this.expandSegments(normalized, chatId)
+    const segments = await this.expandSegments(
+      normalized,
+      chatId,
+      this.quoteExpandDepth(),
+      this.forwardExpandDepth(),
+      this.forwardExpandCount(),
+    )
     const sender = message.sender ?? {}
     const qq = String(message.user_id ?? sender.user_id ?? '')
     return messageRecord({
@@ -428,7 +443,7 @@ export class InboundPipeline {
   }
 
   /**
-   * 把每个媒体占位换成它的本机路径；取不到字节时写成明确的「未取到」。
+   * 把每个媒体占位换成媒体目录内的文件名；取不到字节时写成明确的「未取到」。
    *
    * Args:
    *   segments (Segment[]): 段数组（原地修改）。
@@ -448,7 +463,7 @@ export class InboundPipeline {
       if (segment === undefined) continue
       const path = await this.resolveMediaPath(ref, chatId)
       segments[index] = path !== ''
-        ? withMediaPath(segment, ref, path)
+        ? withMediaPath(segment, ref, mediaDisplayPath(this.ctx.media.dir, path))
         : { type: 'text', data: { text: '(' + mediaLabel(ref.kind) + '未取到)' } }
     }
   }
@@ -475,26 +490,41 @@ export class InboundPipeline {
 
   /**
    * 带外内容就地展开：引用取被引消息、合并转发取节点列表，
-   * 展开结果仍是段，位置不变。
+   * 展开结果仍是段，位置不变。引用与转发各自使用独立的剩余层级。
    *
    * Args:
    *   segments (Segment[]): 段数组。
    *   chatId (ChatId): 会话 id。
+   *   quoteDepth (number): 还能展开的引用层级；<=0 时引用只保留 id。
+   *   forwardDepth (number): 还能展开的转发层级；<=0 时转发只保留 id。
+   *   forwardLimit (number): 本层每一条合并转发可展开的消息条数。
    *
    * Returns:
    *   Promise<Segment[]>: 展开后的段数组。
    *
    * Callers:
-   *   - `recordOf`。
+   *   - `recordOf`（顶层记录）。
+   *   - `expandQuote`、`expandForward`（嵌套内容）。
    */
-  private async expandSegments(segments: Segment[], chatId: ChatId): Promise<Segment[]> {
+  private async expandSegments(
+    segments: Segment[],
+    chatId: ChatId,
+    quoteDepth: number,
+    forwardDepth: number,
+    forwardLimit: number,
+  ): Promise<Segment[]> {
+    if (quoteDepth <= 0 && forwardDepth <= 0) return segments
     const out: Segment[] = []
     for (const segment of segments) {
       if (segment.type === 'reply' && segment.data.id !== '') {
-        out.push(await this.expandQuote(segment.data.id, chatId))
+        out.push(quoteDepth > 0
+          ? await this.expandQuote(segment.data.id, chatId, quoteDepth - 1, forwardDepth, forwardLimit)
+          : segment)
       } else if (segment.type === 'forward') {
         const id = segment.data.id ?? segment.data.resId
-        out.push(id !== undefined && id !== '' ? await this.expandForward(id, chatId) : segment)
+        out.push(id !== undefined && id !== '' && forwardDepth > 0 && forwardLimit > 0
+          ? await this.expandForward(id, chatId, quoteDepth, forwardDepth - 1, forwardLimit)
+          : segment)
       } else {
         out.push(segment)
       }
@@ -528,11 +558,15 @@ export class InboundPipeline {
 
   /**
    * 把一条引用展开成 reply 段：被引消息成为该段的 `message`（自己的记录形状，
-   * 媒体已本地化）。取不到时只保留 id，模型仍可用 get_msg 自查。
+   * 媒体已本地化，嵌套引用/转发按剩余预算继续展开）。取不到时只保留 id，
+   * 模型仍可用 get_msg 自查。
    *
    * Args:
    *   messageId (string): 被引消息 id。
    *   chatId (ChatId): 会话 id。
+   *   quoteDepth (number): 被引消息内还能展开的引用层级。
+   *   forwardDepth (number): 被引消息内还能展开的转发层级。
+   *   forwardLimit (number): 被引消息内合并转发可展开的消息条数。
    *
    * Returns:
    *   Promise<Segment>: reply 段。
@@ -540,7 +574,13 @@ export class InboundPipeline {
    * Callers:
    *   - `expandSegments`。
    */
-  private async expandQuote(messageId: string, chatId: ChatId): Promise<Segment> {
+  private async expandQuote(
+    messageId: string,
+    chatId: ChatId,
+    quoteDepth: number,
+    forwardDepth: number,
+    forwardLimit: number,
+  ): Promise<Segment> {
     const cached = this.quotedCache.get(chatId + '#' + messageId)
     if (cached === null) {
       // 提及校验已经查过并失败：引用展开不再重查同一 id。
@@ -550,7 +590,8 @@ export class InboundPipeline {
     try {
       const data = cached ?? await this.ctx.call('get_msg', { message_id: Number(messageId) }) as RawMessage | undefined
       if (cached === undefined) this.rememberQuoted(chatId, messageId, data ?? null)
-      const segments = await this.normalizedSegments(parseMessage(incomingSegments(data?.message)), chatId)
+      const normalized = await this.normalizedSegments(parseMessage(incomingSegments(data?.message)), chatId)
+      const segments = await this.expandSegments(normalized, chatId, quoteDepth, forwardDepth, forwardLimit)
       if (segments.length === 0) return { type: 'reply', data: { id: messageId } }
       const sender = data?.sender ?? {}
       const qq = String(sender.user_id ?? data?.user_id ?? '')
@@ -578,11 +619,15 @@ export class InboundPipeline {
 
   /**
    * 把一条合并转发展开成 forward 段：节点列表就是记录数组，节点媒体本地化。
-   * 取不到时只保留 id，模型仍可用 get_forward_msg 自查。
+   * 先按 `limit` 展开外层节点；外层节点数不足时，剩余额度按内层转发数量
+   * 均分给每个内层合并转发。取不到时只保留 id，模型仍可用 get_forward_msg 自查。
    *
    * Args:
    *   forwardId (string): 合并转发 id。
    *   chatId (ChatId): 会话 id。
+   *   quoteDepth (number): 节点内容还能展开的引用层级。
+   *   forwardDepth (number): 节点内容还能展开的转发层级。
+   *   limit (number): 本条合并转发可展开的消息条数。
    *
    * Returns:
    *   Promise<Segment>: forward 段。
@@ -590,15 +635,27 @@ export class InboundPipeline {
    * Callers:
    *   - `expandSegments`。
    */
-  private async expandForward(forwardId: string, chatId: ChatId): Promise<Segment> {
+  private async expandForward(
+    forwardId: string,
+    chatId: ChatId,
+    quoteDepth: number,
+    forwardDepth: number,
+    limit: number,
+  ): Promise<Segment> {
     try {
       // NapCat 的 get_forward_msg 接受 message_id 或 id；两个都发以覆盖其他实现。
       const data = await this.ctx.call('get_forward_msg', { id: forwardId, message_id: forwardId }) as {
         messages?: Array<Record<string, unknown>>
       }
       const nodes = Array.isArray(data.messages) ? data.messages : []
-      const messages: MessageRecord[] = []
-      for (const node of nodes) {
+      const pending: Array<{
+        qq: string
+        nickname: string
+        time: string | undefined
+        role: string | undefined
+        segments: Segment[]
+      }> = []
+      for (const node of nodes.slice(0, limit)) {
         const nodeData = (node.data ?? node) as Record<string, unknown>
         const content = nodeData.message ?? nodeData.content
         // 字符串节点体是字面文本：不再做任何 CQ 字符串解析。
@@ -616,13 +673,27 @@ export class InboundPipeline {
           ? nodeData.nickname
           : displayName(sender, qq)
         const seconds = Number(nodeData.time ?? 0)
-        const normalized = await this.normalizedSegments(parseMessage(segments), chatId)
-        messages.push(messageRecord({
+        pending.push({
           qq,
           nickname,
           time: seconds > 0 ? formatClock(seconds * 1000) : undefined,
           role: typeof nodeData.role === 'string' ? nodeData.role : typeof sender.role === 'string' ? sender.role : undefined,
-          message: normalized,
+          segments: await this.normalizedSegments(parseMessage(segments), chatId),
+        })
+      }
+      // 外层先占满 limit；节点数不足时，余额按本层的内层转发总数均分。
+      const nestedForwards = pending.reduce((count, node) => count + node.segments.filter(
+        segment => segment.type === 'forward' && (segment.data.id ?? segment.data.resId ?? '') !== '',
+      ).length, 0)
+      const nestedLimit = nestedForwards === 0 ? 0 : Math.floor((limit - pending.length) / nestedForwards)
+      const messages: MessageRecord[] = []
+      for (const node of pending) {
+        messages.push(messageRecord({
+          qq: node.qq,
+          nickname: node.nickname,
+          time: node.time,
+          role: node.role,
+          message: await this.expandSegments(node.segments, chatId, quoteDepth, forwardDepth, nestedLimit),
         }))
       }
       if (messages.length === 0) currentTrace()?.emit('forward', { ok: false, reason: '合并转发无节点' })
@@ -992,7 +1063,7 @@ export class InboundPipeline {
   private applyTurnSideEffects(records: ConversationRecord[], chatId: ChatId): void {
     const last = records[records.length - 1]
     if (last === undefined || 'notice' in last || !this.ctx.transcriber.enabled) return
-    // 回填后的段只带本机路径：哪一种媒体要转写，由媒体类型自己声明。
+    // 回填后的段只带媒体目录内的文件名：哪一种媒体要转写，由媒体类型自己声明。
     const fileOf = (segment: Segment): string => {
       const data = segment.data as { file?: string }
       return data.file !== undefined && data.file !== '' ? data.file : ''
@@ -1001,7 +1072,7 @@ export class InboundPipeline {
       const kind = mediaKindOf(segment)
       const file = fileOf(segment)
       if (kind !== undefined && MEDIA_KINDS[kind].transcribe === true && file !== '') {
-        void this.transcribeLater(file, chatId)
+        void this.transcribeLater(mediaFilePath(this.ctx.media.dir, file), chatId)
       }
     }
   }
@@ -1033,6 +1104,54 @@ export class InboundPipeline {
       this.ctx.log('warn', 'STT failed: ' + describeError(error))
       currentTrace()?.emit('transcribe', { ok: false, reason: '语音转写失败: ' + describeError(error) })
     }
+  }
+
+  /**
+   * 引用的自动展开层级。
+   *
+   * Args:
+   *   无。
+   *
+   * Returns:
+   *   number: 层级；未配置时为 0（不展开）。
+   *
+   * Callers:
+   *   - `recordOf`。
+   */
+  private quoteExpandDepth(): number {
+    return this.ctx.config.quoteExpandDepth ?? 0
+  }
+
+  /**
+   * 合并转发的自动展开层级。
+   *
+   * Args:
+   *   无。
+   *
+   * Returns:
+   *   number: 层级；未配置时为 0（不展开）。
+   *
+   * Callers:
+   *   - `recordOf`。
+   */
+  private forwardExpandDepth(): number {
+    return this.ctx.config.forwardExpandDepth ?? 0
+  }
+
+  /**
+   * 合并转发单次展开的消息条数。
+   *
+   * Args:
+   *   无。
+   *
+   * Returns:
+   *   number: 条数上限；未配置时用默认值。
+   *
+   * Callers:
+   *   - `recordOf`。
+   */
+  private forwardExpandCount(): number {
+    return this.ctx.config.forwardExpandCount ?? DEFAULT_FORWARD_EXPAND_COUNT
   }
 
   /** 当前是否处于休眠窗口（每日窗口或高峰时段）。 */
@@ -1174,12 +1293,12 @@ async function fileExists(path: string): Promise<boolean> {
 }
 
 /**
- * 把一个媒体段换成带本机路径的段：文件段带上原始文件名，图片带上贴纸说明。
+ * 把一个媒体段换成带文件名的段：文件段带上原始文件名，图片带上贴纸说明。
  *
  * Args:
  *   segment (Segment): 原媒体段。
  *   ref (MediaRef): 媒体引用。
- *   path (string): 本机路径。
+ *   path (string): 媒体目录内的文件名（目录外的路径保持原样）。
  *
  * Returns:
  *   Segment: 回填后的段。
@@ -1190,6 +1309,24 @@ async function fileExists(path: string): Promise<boolean> {
 function withMediaPath(segment: Segment, ref: MediaRef, path: string): Segment {
   if (mediaKindOf(segment) === undefined) return segment
   return { ...segment, data: MEDIA_KINDS[ref.kind].resolved(ref, path) } as Segment
+}
+
+/**
+ * 记录里的媒体路径还原成本机路径：媒体目录内的文件名拼上目录，目录外的路径
+ * 原样返回。
+ *
+ * Args:
+ *   mediaDir (string): 媒体目录。
+ *   file (string): 记录里的媒体路径。
+ *
+ * Returns:
+ *   string: 本机路径。
+ *
+ * Callers:
+ *   - `applyTurnSideEffects`（语音转写）。
+ */
+function mediaFilePath(mediaDir: string, file: string): string {
+  return isAbsolute(file) ? file : join(mediaDir, file)
 }
 
 /** 媒体解析端口：动作调用、媒体存储与文件兜底。 */

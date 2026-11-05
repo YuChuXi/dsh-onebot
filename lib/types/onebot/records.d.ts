@@ -111,6 +111,6 @@ export declare function renderRecord(record: ConversationRecord): RenderedRecord
  *   string: JSON 数组文本。
  *
  * Callers:
- *   - `src/inbound/index.ts:InboundPipeline.processInbound`、`sleepTurn`。
+ *   - `src/inbound/index.ts:InboundPipeline.processInbound`、`sleepTurn`、`wakeWithNote`。
  */
 export declare function formatRecords(records: ConversationRecord[]): string;

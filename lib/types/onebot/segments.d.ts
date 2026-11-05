@@ -152,6 +152,8 @@ export interface MediaRef {
     name?: string;
     subType?: string | number;
     summary?: string;
+    /** 商城表情五字段：入站原样保留，回填时与本地文件一起写回段数据。 */
+    mface?: SegmentData['mface'];
     /** 该引用在段数组中的下标，回填路径时按位置写回。 */
     segmentIndex: number;
 }

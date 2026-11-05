@@ -41,18 +41,27 @@ describe('parseMessage', () => {
       .toEqual({ type: 'face', data: { id: '14', name: '微笑' } })
   })
 
-  it('turns a market sticker (mface) with a url into an image ref', () => {
+  it('keeps a market sticker (mface) as a sticker ref with its five fields', () => {
     const parsed = parseMessage([{
       type: 'mface',
-      data: { summary: '[美味]', url: 'https://gxh.vip/a.gif', emoji_id: 'abc', key: 'k' },
+      data: { summary: '[美味]', url: 'https://gxh.vip/a.gif', emoji_id: 'abc', emoji_package_id: '3', key: 'k' },
     }])
-    expect(parsed.segments).toEqual([{ type: 'image', data: {} }])
-    expect(parsed.media[0]).toMatchObject({ kind: 'image', segmentIndex: 0, url: 'https://gxh.vip/a.gif', summary: '[美味]' })
+    expect(parsed.segments).toEqual([{
+      type: 'mface',
+      data: { summary: '[美味]', url: 'https://gxh.vip/a.gif', emoji_id: 'abc', emoji_package_id: '3', key: 'k' },
+    }])
+    expect(parsed.media[0]).toMatchObject({
+      kind: 'sticker',
+      segmentIndex: 0,
+      url: 'https://gxh.vip/a.gif',
+      summary: '[美味]',
+      mface: { summary: '[美味]', url: 'https://gxh.vip/a.gif', emoji_id: 'abc', emoji_package_id: '3', key: 'k' },
+    })
   })
 
-  it('keeps an mface without a usable url as a plain five-field segment', () => {
+  it('keeps an mface without a url as a plain five-field segment', () => {
     const parsed = parseMessage([{ type: 'mface', data: { summary: '[x]', url: 'not-a-url' } }])
-    expect(parsed.media).toEqual([])
+    expect(parsed.media[0]).toMatchObject({ kind: 'sticker', url: 'not-a-url' })
     expect(parsed.segments[0]).toMatchObject({ type: 'mface', data: { summary: '[x]', url: 'not-a-url' } })
   })
 

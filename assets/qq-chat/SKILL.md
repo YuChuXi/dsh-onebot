@@ -9,11 +9,11 @@ description: NapCat（OneBot 11）白名单接口的参数与返回、消息段�
 
 ## 查接口
 
-`qq_napcat_api` 只放行 `references/api.md` 里的 22 个 action，其他接口会被拒。该文件按用途分节，每个 action 一节，标题是 `### <action> — <中文用途>`，按任务词检索即可命中。
+`qq_napcat_api` 只放行 `references/api.md` 里的 20 个 action，其他接口会被拒。该文件按用途分节，每个 action 一节，标题是 `### <action> — <中文用途>`，按任务词检索即可命中。
 
 需要群号的接口，`group_id` 用系统提示词「当前会话」里的群号；私聊接口用其中的对方 QQ。不要从消息记录或接口返回值里推断。
 
-任务词：群文件、子目录、下载、上传、私聊文件、群公告、群相册、相册图片、群成员、单个成员、陌生人、合并转发、语音、文件路径、OCR、AI 语音、收藏表情、表情包、商城表情。
+任务词：群文件、子目录、下载、上传、私聊文件、群公告、群相册、相册图片、群成员、单个成员、陌生人、合并转发、语音、文件路径、OCR、AI 语音。
 
 ## 段与媒体
 
@@ -21,7 +21,16 @@ description: NapCat（OneBot 11）白名单接口的参数与返回、消息段�
 
 ## 表情
 
-`references/faces.md`：`face` 段 id 与中文名对照。
+表情保存在插件媒体目录的本地库中，不使用 QQ 收藏体系：
+
+- `qq_collect_sticker`：批量收藏，`items` 每项给 `path`（媒体目录内）、`url` 或 `mface` 五字段之一，`name` 必填且写清图像描述（日后靠它检索）；整套商城表情一次传入。
+- `qq_list_stickers`：`query` 按描述做子串检索；`preview` 把命中结果的前 N 张图片交给模型查看。
+- `qq_send_sticker`：按序号、图像描述、本地路径、URL 或商城表情五字段发送；描述精确匹配优先，命中多张时改用序号。
+- `qq_remark_sticker`：修改图像描述。
+
+商城表情在消息记录里是 `mface` 段，带 `summary`、`emoji_id`、`emoji_package_id`、`key`、`url` 与本地文件 `file`；原样传入 `mface` 即可收藏或重放。
+
+经典表情（`face` 段）的 id 与中文名对照见 `references/faces.md`。
 
 ## 定时任务
 

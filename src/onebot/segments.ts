@@ -92,6 +92,8 @@ export interface MediaRef {
   name?: string
   subType?: string | number
   summary?: string
+  /** 商城表情五字段：入站原样保留，回填时与本地文件一起写回段数据。 */
+  mface?: SegmentData['mface']
   /** 该引用在段数组中的下标，回填路径时按位置写回。 */
   segmentIndex: number
 }
@@ -244,6 +246,29 @@ function mediaRefOf(segment: Segment, raw: IncomingSegment, index: number): Medi
     ...(scalar(data.sub_type) !== undefined ? { subType: scalar(data.sub_type) } : {}),
     ...(scalar(data['sub-type']) !== undefined ? { subType: scalar(data['sub-type']) } : {}),
     ...(text(data.summary) !== undefined ? { summary: text(data.summary) } : {}),
+    ...(kind === 'sticker' ? { mface: mfaceOf(data) } : {}),
+  }
+}
+
+/**
+ * 取商城表情五字段；缺失字段不写入，重放时由发送侧校验完整性。
+ *
+ * Args:
+ *   data (Record<string, unknown>): 原始段数据。
+ *
+ * Returns:
+ *   SegmentData['mface']: 只含存在的字段。
+ *
+ * Callers:
+ *   - `mediaRefOf`。
+ */
+function mfaceOf(data: Record<string, unknown>): SegmentData['mface'] {
+  return {
+    ...(text(data.summary) !== undefined ? { summary: text(data.summary) } : {}),
+    ...(text(data.emoji_id) !== undefined ? { emoji_id: text(data.emoji_id) } : {}),
+    ...(text(data.emoji_package_id) !== undefined ? { emoji_package_id: text(data.emoji_package_id) } : {}),
+    ...(text(data.key) !== undefined ? { key: text(data.key) } : {}),
+    ...(text(data.url) !== undefined ? { url: text(data.url) } : {}),
   }
 }
 
@@ -265,21 +290,6 @@ export function parseMessage(segments: IncomingSegment[] | undefined): ParsedMes
   const parsed: Segment[] = []
   for (const raw of Array.isArray(segments) ? segments : []) {
     const segment = parseSegment(raw)
-    // 表情包（mface）带图片地址时按图片处理：模型拿到本地文件与 QQ 的说明。
-    if (segment.type === 'mface') {
-      const url = segment.data.url
-      if (url !== undefined && /^https?:\/\//.test(url)) {
-        const index = parsed.length
-        parsed.push({ type: 'image', data: {} })
-        media.push({
-          kind: 'image',
-          segmentIndex: index,
-          url,
-          ...(segment.data.summary !== undefined ? { summary: segment.data.summary } : {}),
-        })
-        continue
-      }
-    }
     if (segment.type === 'text') {
       if (segment.data.text === '') continue
       textParts.push(segment.data.text)

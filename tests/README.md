@@ -34,8 +34,8 @@
 | `commands.spec.ts` | 命令面 `/new` `/session` `/model` `/compact` 的路由与边界 |
 | `registry.spec.ts` | ensureChat/loadMapping/saveMapping、退休集合、collision 自愈、会话切换、每会话设置存活 |
 | `mapping-settings.spec.ts` | workspacePath 与上文水位在映射文件里的持久化往返、驱逐/重置/失败重试的设置载体 |
-| `settings-remote.spec.ts` | Typert Remote：36 键白名单、快照脱敏、revision 乐观锁、宿主 configEditor 失败归一 |
-| `client-settings.spec.ts` | `lib/client.js` bundle：四组 36 键、descriptor 契约、渲染/保存/冲突合并/数字行内校验 |
+| `settings-remote.spec.ts` | Typert Remote：39 键白名单、快照脱敏、revision 乐观锁、宿主 configEditor 失败归一 |
+| `client-settings.spec.ts` | `lib/client.js` bundle：六组 39 键、descriptor 契约、渲染/保存/冲突合并/数字行内校验 |
 | `trace.spec.ts` | traceId 贯穿、jsonl 字段与轮转、同因限流、warn 级过滤 |
 | `record-replay.spec.ts` | 入站录制、脱敏、轮转，以及离线回放的真实管线决策摘要 |
 | `inject.spec.ts` | 调试注入通道：历史行跳过、dry-run 拦截、真实消息清除注入轮次 |

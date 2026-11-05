@@ -45,6 +45,12 @@ export interface BridgeConfig {
   recentMessages?: number
   /** W2-② (chatId, message_id) 去重窗口秒数；0 关闭，absent → 300。 */
   dedupWindowSeconds?: number
+  /** 引用的自动展开层级；0 = 不展开（absent → 0）。 */
+  quoteExpandDepth?: number
+  /** 合并转发的自动展开层级；0 = 不展开（absent → 0）。 */
+  forwardExpandDepth?: number
+  /** 合并转发单次展开的消息条数上限；外层余额按内层转发数量均分（absent → 20）。 */
+  forwardExpandCount?: number
   /** 休眠模式：window = 用 sleepStart/sleepEnd 的每日时段；peak = 高峰时段。 */
   sleepMode?: 'window' | 'peak'
   /** 休眠时段起点（HH:MM，Asia/Shanghai 墙钟）；留空 = 不启用。 */

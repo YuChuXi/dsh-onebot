@@ -73,6 +73,7 @@
         "qq_list_stickers",
         "qq_send_sticker",
         "qq_collect_sticker",
+        "qq_remark_sticker",
         "qq_end_turn",
         "qq_create_schedule",
         "qq_list_schedules",

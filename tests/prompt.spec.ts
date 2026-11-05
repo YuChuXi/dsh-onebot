@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { buildPlatformPrompt } from '../src/bridge/prompt.js'
 
+const MEDIA_DIR = '/srv/dsh/media/onebot'
+
 describe('buildPlatformPrompt', () => {
   it('forbids host Web-interaction tools on QQ and asks for plain-text confirmation', () => {
-    const text = buildPlatformPrompt('group:123456', false)
+    const text = buildPlatformPrompt('group:123456', false, MEDIA_DIR)
     expect(text).toContain('ask_user_question')
     expect(text).toContain('exit_plan_mode')
     expect(text).toContain('请用文字提问')
@@ -13,20 +15,26 @@ describe('buildPlatformPrompt', () => {
   })
 
   it('states the current chat number so group APIs need no inference', () => {
-    expect(buildPlatformPrompt('group:823214881', false)).toContain('群号 823214881')
-    expect(buildPlatformPrompt('private:3619545924', false)).toContain('对方 QQ 3619545924')
+    expect(buildPlatformPrompt('group:823214881', false, MEDIA_DIR)).toContain('群号 823214881')
+    expect(buildPlatformPrompt('private:3619545924', false, MEDIA_DIR)).toContain('对方 QQ 3619545924')
+  })
+
+  it('states the media directory prefix that media file names are relative to', () => {
+    const text = buildPlatformPrompt('group:1', false, MEDIA_DIR)
+    expect(text).toContain('媒体目录下的文件名')
+    expect(text).toContain(MEDIA_DIR + '/<file>')
   })
 
   it('keeps the restricted-member note only when enabled', () => {
-    expect(buildPlatformPrompt('group:1', false)).not.toContain('受限成员')
-    expect(buildPlatformPrompt('group:1', true)).toContain('受限成员')
+    expect(buildPlatformPrompt('group:1', false, MEDIA_DIR)).not.toContain('受限成员')
+    expect(buildPlatformPrompt('group:1', true, MEDIA_DIR)).toContain('受限成员')
   })
 
   it('appends the extra prompt verbatim after the channel sections, ignoring blank input', () => {
-    const base = buildPlatformPrompt('group:1', false)
-    const extra = buildPlatformPrompt('group:1', false, '  你是群里的猫娘，说话简短。\n')
+    const base = buildPlatformPrompt('group:1', false, MEDIA_DIR)
+    const extra = buildPlatformPrompt('group:1', false, MEDIA_DIR, '  你是群里的猫娘，说话简短。\n')
     expect(extra).toBe(base + '\n你是群里的猫娘，说话简短。\n')
-    expect(buildPlatformPrompt('group:1', false, '   ')).toBe(base)
-    expect(buildPlatformPrompt('group:1', true, '保持人设')).toContain('保持人设')
+    expect(buildPlatformPrompt('group:1', false, MEDIA_DIR, '   ')).toBe(base)
+    expect(buildPlatformPrompt('group:1', true, MEDIA_DIR, '保持人设')).toContain('保持人设')
   })
 })

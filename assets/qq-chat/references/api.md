@@ -1,6 +1,6 @@
 # 白名单 API
 
-`qq_napcat_api {action, params}` 只放行本文件的 22 个 action，其余 OneBot/NapCat 接口会被拒绝。返回 NapCat 响应里的 `data`；`retcode != 0` 时 `message` 是失败原因。
+`qq_napcat_api {action, params}` 只放行本文件的 20 个 action，其余 OneBot/NapCat 接口会被拒绝。返回 NapCat 响应里的 `data`；`retcode != 0` 时 `message` 是失败原因。
 
 参数里的 `group_id`、`user_id` 传数字即可，NapCat 内部按字符串处理。
 
@@ -224,35 +224,6 @@
 ```
 
 各字段都可能出现，以实际返回为准。`file` 是 NapCat 机器上的路径，`url` 是下载链接，都不是字节；需要内容再读该路径、下载该链接，或直接用 `base64`。
-
-## 表情
-
-### fetch_custom_face — 获取收藏表情
-
-| 字段 | 类型 | 必选 | 说明 |
-|---|---|---|---|
-| `count` | number | 否 | 数量，默认 48 |
-
-```json
-["https://...","https://..."]
-```
-
-返回 JSON 字符串数组，每项是一张收藏表情的图片 URL。
-
-### add_custom_face — 添加自定义表情
-
-| 字段 | 类型 | 必选 | 说明 |
-|---|---|---|---|
-| `file` | string | 是 | NapCat 本机可读的表情文件路径 |
-| `emoji_id` | string | 否 | 商城表情 ID，默认空串 |
-| `package_id` | number | 否 | 商城表情包 ID，默认 0 |
-| `file_name` | string | 否 | 文件名，默认取 `file` 的 basename |
-| `file_size` | number | 否 | 文件大小，默认读取本地文件 |
-| `md5` | string | 否 | 文件 MD5，默认读取本地文件计算 |
-| `is_mark_face` | boolean | 否 | 是否商城表情 |
-| `is_origin` | boolean | 否 | 是否原图 |
-
-无返回数据。`file` 必须位于 NapCat 能访问的本机路径；跨机部署时插件媒体目录不可见，收藏会失败。
 
 ## 图片识别与 AI 语音
 

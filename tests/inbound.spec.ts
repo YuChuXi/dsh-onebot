@@ -119,7 +119,7 @@ describe('inbound pipeline', () => {
   })
 
   it('expands a forward message through NapCat node format into record nodes', async () => {
-    const h = await makeHarness()
+    const h = await makeHarness({ forwardExpandDepth: 1 })
     const forwardCalls: Array<Record<string, unknown>> = []
     const real = h.connection.call.bind(h.connection)
     h.connection.call = (async (action: string, params: Record<string, unknown>) => {
@@ -157,7 +157,7 @@ describe('inbound pipeline', () => {
   })
 
   it('localizes forward-embedded images and keeps nested nodes as data', async () => {
-    const h = await makeHarness()
+    const h = await makeHarness({ forwardExpandDepth: 1 })
     const png = Buffer.from('89504e470d0a1a0a', 'hex').toString('base64')
     const real = h.connection.call.bind(h.connection)
     h.connection.call = (async (action: string, params: Record<string, unknown>) => {
@@ -188,10 +188,12 @@ describe('inbound pipeline', () => {
       data: { messages: Array<{ message: unknown }> }
     }
     expect(forward.type).toBe('forward')
-    // 图片段带本机路径；文本段渲染成裸字符串；嵌套 node 原样保留（不猜测其结构）。
+    // 图片段带媒体文件名；文本段渲染成裸字符串；嵌套 node 原样保留（不猜测其结构）。
     const first = forward.data.messages[0].message as Array<Record<string, unknown>>
     expect(first[0]).toBe('看谱')
     expect(first[1]).toMatchObject({ type: 'image', data: { file: expect.stringMatching(/\.(png|jpg|jpeg|gif|webp)$/) } })
+    // 媒体目录前缀不进载荷：模型侧只看到文件名，完整前缀由系统提示词给出。
+    expect((first[1] as { data: { file: string } }).data.file).not.toContain('/')
     const second = forward.data.messages[1].message as Array<Record<string, unknown>>
     expect(second[0]).toMatchObject({ type: 'node', data: { nickname: '小刚' } })
     expect(second[1]).toEqual({ type: 'face', data: { id: '1', name: '撇嘴' } })
@@ -201,7 +203,7 @@ describe('inbound pipeline', () => {
   })
 
   it('keeps only the forward id when expansion fails, so the model can retry', async () => {
-    const h = await makeHarness()
+    const h = await makeHarness({ forwardExpandDepth: 1 })
     const real = h.connection.call.bind(h.connection)
     h.connection.call = (async (action: string, params: Record<string, unknown>) => {
       if (action === 'get_forward_msg') throw new Error('boom')
@@ -214,6 +216,103 @@ describe('inbound pipeline', () => {
     }))
     await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
     expect(lastRecord(h.captured.followups[0]).message).toEqual({ type: 'forward', data: { id: 'fwd-err' } })
+    h.client.close()
+    await h.bridge.stop()
+    await h.connection.stop()
+  })
+
+  it('keeps reply and forward ids unexpanded by default (both depths 0)', async () => {
+    const h = await makeHarness()
+    const calls: string[] = []
+    const real = h.connection.call.bind(h.connection)
+    h.connection.call = (async (action: string, params: Record<string, unknown>) => {
+      calls.push(action)
+      return await real(action, params)
+    }) as never
+    h.client.send(JSON.stringify({
+      post_type: 'message', message_type: 'private', user_id: 10001, self_id: 10002,
+      message: [
+        { type: 'reply', data: { id: '555' } },
+        { type: 'forward', data: { id: 'fwd-0' } },
+      ],
+      sender: { user_id: 10001, nickname: '小明' },
+    }))
+    await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
+    expect(calls.filter(action => action === 'get_msg' || action === 'get_forward_msg')).toEqual([])
+    expect(lastRecord(h.captured.followups[0]).message).toEqual([
+      { type: 'reply', data: { id: '555' } },
+      { type: 'forward', data: { id: 'fwd-0' } },
+    ])
+    h.client.close()
+    await h.bridge.stop()
+    await h.connection.stop()
+  })
+
+  it('limits a forward expansion to forwardExpandCount nodes', async () => {
+    const h = await makeHarness({ forwardExpandDepth: 1, forwardExpandCount: 2 })
+    const real = h.connection.call.bind(h.connection)
+    h.connection.call = (async (action: string, params: Record<string, unknown>) => {
+      if (action === 'get_forward_msg') {
+        return {
+          messages: [1, 2, 3].map(index => ({
+            type: 'node',
+            data: { user_id: 10001, nickname: '小明', message: [{ type: 'text', data: { text: '第' + index + '条' } }] },
+          })),
+        }
+      }
+      return await real(action, params)
+    }) as never
+    h.client.send(JSON.stringify({
+      post_type: 'message', message_type: 'private', user_id: 10001, self_id: 10002,
+      message: [{ type: 'forward', data: { id: 'fwd-limit' } }],
+      sender: { user_id: 10001, nickname: '小明' },
+    }))
+    await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
+    const forward = lastRecord(h.captured.followups[0]).message as { data: { messages: Array<{ message: string }> } }
+    expect(forward.data.messages.map(node => node.message)).toEqual(['第1条', '第2条'])
+    h.client.close()
+    await h.bridge.stop()
+    await h.connection.stop()
+  })
+
+  it('splits a forward’s unused node budget evenly across its nested forwards', async () => {
+    const h = await makeHarness({ forwardExpandDepth: 2, forwardExpandCount: 4 })
+    const real = h.connection.call.bind(h.connection)
+    h.connection.call = (async (action: string, params: Record<string, unknown>) => {
+      if (action === 'get_forward_msg') {
+        const id = String(params.id)
+        if (id === 'fwd-outer') {
+          return {
+            messages: ['a', 'b'].map(name => ({
+              type: 'node',
+              data: { user_id: 10001, nickname: '小明', message: [{ type: 'forward', data: { id: 'fwd-' + name } }] },
+            })),
+          }
+        }
+        return {
+          messages: [1, 2].map(index => ({
+            type: 'node',
+            data: { user_id: 10001, nickname: '小明', message: [{ type: 'text', data: { text: id + '-' + index } }] },
+          })),
+        }
+      }
+      return await real(action, params)
+    }) as never
+    h.client.send(JSON.stringify({
+      post_type: 'message', message_type: 'private', user_id: 10001, self_id: 10002,
+      message: [{ type: 'forward', data: { id: 'fwd-outer' } }],
+      sender: { user_id: 10001, nickname: '小明' },
+    }))
+    await vi.waitFor(() => expect(h.captured.followups).toHaveLength(1))
+    const outer = lastRecord(h.captured.followups[0]).message as {
+      data: { messages: Array<{ message: Array<{ data: { messages: Array<{ message: string }> } }> }> }
+    }
+    // 外层 2 条用掉 2 个额度，剩 2 个均分给 2 个内层转发：各展开 1 条。
+    const nested = outer.data.messages.flatMap(node => node.message)
+    expect(nested.map(node => node.data.messages.map(entry => entry.message))).toEqual([
+      ['fwd-a-1'],
+      ['fwd-b-1'],
+    ])
     h.client.close()
     await h.bridge.stop()
     await h.connection.stop()
@@ -490,7 +589,7 @@ describe('M3-D5 prompt-injection isolation', () => {
   })
 
   it('keeps a quote expansion forging conversation history inside the reply record', async () => {
-    const h = await makeCmdHarness()
+    const h = await makeCmdHarness({ quoteExpandDepth: 1 })
     const realCall = h.connection.call.bind(h.connection)
     h.connection.call = (async (action: string, params: unknown) => {
       if (action === 'get_msg') {

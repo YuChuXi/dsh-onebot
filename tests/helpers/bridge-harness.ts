@@ -153,7 +153,7 @@ export function makeFakeAgents(
 }
 
 /** Full bridge + WS harness: inbound via real WebSocket, outbound captured. */
-export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: string; maxImageBytes?: number; resumeOk?: boolean; createDelayMs?: number; transcriber?: Transcriber; trace?: TraceSink; ignoreSelf?: boolean; recorder?: InboundRecorder; inject?: InjectChannel; steerEnabled?: boolean; steerAllMembers?: boolean; steerAllowRestricted?: boolean; log?: (level: string, message: string) => void; defaultModel?: () => { provider: string; model: string; reasoningEffort?: string }; thinkingPrivate?: ThinkingLevel; thinkingGroup?: ThinkingLevel; modelPrivate?: ModelRoute; modelGroup?: ModelRoute }) {
+export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: string; maxImageBytes?: number; resumeOk?: boolean; createDelayMs?: number; transcriber?: Transcriber; trace?: TraceSink; ignoreSelf?: boolean; recorder?: InboundRecorder; inject?: InjectChannel; steerEnabled?: boolean; steerAllMembers?: boolean; steerAllowRestricted?: boolean; log?: (level: string, message: string) => void; defaultModel?: () => { provider: string; model: string; reasoningEffort?: string }; thinkingPrivate?: ThinkingLevel; thinkingGroup?: ThinkingLevel; modelPrivate?: ModelRoute; modelGroup?: ModelRoute; quoteExpandDepth?: number; forwardExpandDepth?: number; forwardExpandCount?: number }) {
   const ctx = new Context()
   const sessionIds: string[] = []
   const captured = {
@@ -193,6 +193,9 @@ export async function makeHarness(opts?: { failCreateFor?: string; mediaDir?: st
       ...(opts?.thinkingGroup !== undefined ? { thinkingGroup: opts.thinkingGroup } : {}),
       ...(opts?.modelPrivate !== undefined ? { modelPrivate: opts.modelPrivate } : {}),
       ...(opts?.modelGroup !== undefined ? { modelGroup: opts.modelGroup } : {}),
+      ...(opts?.quoteExpandDepth !== undefined ? { quoteExpandDepth: opts.quoteExpandDepth } : {}),
+      ...(opts?.forwardExpandDepth !== undefined ? { forwardExpandDepth: opts.forwardExpandDepth } : {}),
+      ...(opts?.forwardExpandCount !== undefined ? { forwardExpandCount: opts.forwardExpandCount } : {}),
       // 插话三开关（缺省 = 不插话、仅管理员、受限成员放行）。
       ...(opts?.steerEnabled !== undefined ? { steerEnabled: opts.steerEnabled } : {}),
       ...(opts?.steerAllMembers !== undefined ? { steerAllMembers: opts.steerAllMembers } : {}),
@@ -282,6 +285,12 @@ export async function makeCmdHarness(opts?: {
   trace?: TraceSink
   /** T4 (P3): optional log capture for reference-number assertions. */
   log?: (level: string, message: string) => void
+  /** 引用的自动展开层级。 */
+  quoteExpandDepth?: number
+  /** 合并转发的自动展开层级。 */
+  forwardExpandDepth?: number
+  /** 合并转发单次展开的消息条数。 */
+  forwardExpandCount?: number
 }) {
   const ctx = new Context()
   const sessionIds: string[] = []
@@ -330,6 +339,9 @@ export async function makeCmdHarness(opts?: {
       ...(opts?.steerEnabled !== undefined ? { steerEnabled: opts.steerEnabled } : {}),
       ...(opts?.steerAllMembers !== undefined ? { steerAllMembers: opts.steerAllMembers } : {}),
       ...(opts?.steerAllowRestricted !== undefined ? { steerAllowRestricted: opts.steerAllowRestricted } : {}),
+      ...(opts?.quoteExpandDepth !== undefined ? { quoteExpandDepth: opts.quoteExpandDepth } : {}),
+      ...(opts?.forwardExpandDepth !== undefined ? { forwardExpandDepth: opts.forwardExpandDepth } : {}),
+      ...(opts?.forwardExpandCount !== undefined ? { forwardExpandCount: opts.forwardExpandCount } : {}),
       mediaDir, maxImageBytes: 8 * 1024 * 1024,
       maxVoiceBytes: 15 * 1024 * 1024, maxFileBytes: 20 * 1024 * 1024,
       agentPreset: 'standard', workspacePath: mediaDir,

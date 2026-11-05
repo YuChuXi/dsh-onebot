@@ -5,16 +5,16 @@
  * window.__ModuleLoader__）的模块级契约：
  *   ① 语法可解析（new Function）+ CJS banner/footer 形态 + externals 仅 react；
  *   ② 入口导出 inject + apply；
- *   ③ 六组 36 键：分组/键集/默认值与宿主侧 src/settings-remote.ts 导出常量逐字一致（descriptor 契约核对，防两侧漂移）；
+ *   ③ 六组 39 键：分组/键集/默认值与宿主侧 src/settings-remote.ts 导出常量逐字一致（descriptor 契约核对，防两侧漂移）；
  *      诊断组 5 键文案为中文标签 + 一句话「关掉会怎样」+ 配置键名（W6）；
  *   ④ Typert descriptor 与 T3 服务方法面逐字对齐：getSettings() /
  *      updateSettings(patch, expectedRevision) / getModelEfforts(provider, model) /
  *      listWorkspaces()（W7），全
  *      positional，namespace onebotSettings，result codec 可解析 host 形态快照
  *      （含脱敏 accessToken）与 workspace 列表；
- *   ⑤ 渲染函数模块级可测：renderGroup 纯函数产出六组 36 键控件，accessToken
+ *   ⑤ 渲染函数模块级可测：renderGroup 纯函数产出六组 39 键控件，accessToken
  *      密码型输入且不明文回显（脱敏约定：host 快照 accessToken 恒 ''）；
- *   ⑥ 保存语义：computePatch 产出 36 键子集 patch；secretDraft '' = 不修改、
+ *   ⑥ 保存语义：computePatch 产出 39 键子集 patch；secretDraft '' = 不修改、
  *      clearSecret = accessToken ''（清空）；数字非法键不进 patch。
  *
  * 契约唯一来源：docs/settings-page-design.md（T1 定案）§3/§3.1/§4/§5。
@@ -137,7 +137,7 @@ describe('T4 客户端 bundle — descriptor 契约核对（与 T3 src/settings-
     expect(listWorkspaces.result.schema.parse({ available: false, workspaces: [] })).toEqual({ available: false, workspaces: [] })
   })
 
-  it('result codec 可解析宿主形态快照（T1 §3：36 键 config + choices/catalog + secrets 脱敏标记 + groups + effect=restart）', () => {
+  it('result codec 可解析宿主形态快照（T1 §3：39 键 config + choices/catalog + secrets 脱敏标记 + groups + effect=restart）', () => {
     const getSettings = descriptors[0] as { result: { schema: { parse(value: unknown): unknown } } }
     const config: Record<string, unknown> = { ...SCHEMA_DEFAULTS }
     config.accessToken = '' // 宿主 buildSnapshot 脱敏约定：快照 accessToken 恒 ''
@@ -168,7 +168,7 @@ describe('T4 客户端 bundle — descriptor 契约核对（与 T3 src/settings-
     expect(() => getSettings.result.schema.parse({ revision: 0, entryActive: true, config: SCHEMA_DEFAULTS, secrets: [], groups: SETTINGS_GROUPS, effect: 'none' })).toThrow()
   })
 
-  it('updateSettings patch codec 接受 36 键任意子集、拒绝非法枚举值', () => {
+  it('updateSettings patch codec 接受 39 键任意子集、拒绝非法枚举值', () => {
     const updateSettings = descriptors[1] as { parameters: Array<{ codec: { schema: { parse(value: unknown): unknown } } }> }
     const patchCodec = updateSettings.parameters[0].codec.schema
     expect(patchCodec.parse({ port: 1234 })).toEqual({ port: 1234 })
@@ -179,12 +179,12 @@ describe('T4 客户端 bundle — descriptor 契约核对（与 T3 src/settings-
   })
 })
 
-describe('T4 客户端 bundle — 六组 36 键（分组/键集/默认值 = T1 §4 表 + W6 诊断组 + W7 workspacePath + 私聊/群聊两块 = T3 常量）', () => {
+describe('T4 客户端 bundle — 六组 39 键（分组/键集/默认值 = T1 §4 表 + W6 诊断组 + W7 workspacePath + 私聊/群聊两块 = T3 常量）', () => {
   it('分组与键序逐字对齐 host SETTINGS_GROUPS', () => {
     expect(client.GROUP_KEYS).toEqual(SETTINGS_GROUPS)
     expect(groups.map((group) => group.id)).toEqual(['connection', 'private', 'group', 'permissions', 'behavior', 'diagnostics'])
     expect(allFields.map((field) => field.key).sort()).toEqual([...ALL_KEYS].sort())
-    expect(allFields).toHaveLength(36)
+    expect(allFields).toHaveLength(39)
   })
 
   it('默认值逐字对齐 host SCHEMA_DEFAULTS（重置按钮唯一来源）', () => {
@@ -242,13 +242,13 @@ describe('T4 客户端 bundle — 渲染函数模块级可测（renderGroup 纯�
     }))
   }
 
-  it('六组各产出标题与逐字段控件行（36 行 obx-field）', () => {
+  it('六组各产出标题与逐字段控件行（39 行 obx-field）', () => {
     const sections = renderAll(draft({ config: SCHEMA_DEFAULTS }))
     expect(sections.map((section) => (section.props as Record<string, unknown>)['data-group'])).toEqual(['connection', 'private', 'group', 'permissions', 'behavior', 'diagnostics'])
     const titles = sections.map((section) => ((section.children[0] as StubElement).children[0] as string))
     expect(titles).toEqual(['连接', '私聊', '群聊', '权限', '行为', '诊断'])
     const fieldRows = sections.flatMap((section) => walk(section).filter((element) => element.type === 'div' && element.props.className === 'obx-field'))
-    expect(fieldRows).toHaveLength(36)
+    expect(fieldRows).toHaveLength(39)
   })
 
   it('动态 choices 收窄枚举选项，并保留已存的旧值', () => {
@@ -297,7 +297,7 @@ describe('T4 客户端 bundle — 渲染函数模块级可测（renderGroup 纯�
     expect(changes[2]).toEqual({ key: 'modelPrivate', value: '' })
   })
 
-  it('控件类型齐备：6 枚举下拉 + 4 模型下拉 + 5 多行文本 + 12 布尔勾选 + 11 文本框 + 1 密码框（secret 另含清除勾选）', () => {
+  it('控件类型齐备：6 枚举下拉 + 4 模型下拉 + 5 多行文本 + 12 布尔勾选 + 14 文本框 + 1 密码框（secret 另含清除勾选）', () => {
     const elements = renderAll(draft({ config: SCHEMA_DEFAULTS })).flatMap((section) => walk(section))
     const inputs = elements.filter((element) => element.type === 'input') as Array<StubElement & { props: Record<string, unknown> }>
     const selects = elements.filter((element) => element.type === 'select')
@@ -305,7 +305,7 @@ describe('T4 客户端 bundle — 渲染函数模块级可测（renderGroup 纯�
     expect(selects).toHaveLength(10) // mode/dmPolicy/groupPolicy/sleepMode/thinkingPrivate/thinkingGroup + 两组模型各 2
     expect(textareas).toHaveLength(5) // 3 字符串数组 + 2 附加提示词
     expect(inputs.filter((input) => input.props.type === 'checkbox')).toHaveLength(11 + 1) // 11 布尔（requireMention/allowAllUsers/sendErrorNotice + 3 插话开关 + 5 诊断）+ secret 清除勾选
-    expect(inputs.filter((input) => input.props.type === 'text')).toHaveLength(11) // host/url/botQQ/workspacePath/sleepStart/sleepEnd + port/三档出站间隔/recentMessages（number 以文本框渲染）
+    expect(inputs.filter((input) => input.props.type === 'text')).toHaveLength(14) // host/url/botQQ/workspacePath/sleepStart/sleepEnd + port/三档出站间隔/recentMessages + 引用与转发的三个展开参数（number 以文本框渲染）
     expect(inputs.filter((input) => input.props.type === 'password')).toHaveLength(1)
   })
 
@@ -338,7 +338,7 @@ describe('T4 客户端 bundle — 保存语义（updateSettings(patch, expectedR
     opts?: { secretDraft?: string; clearSecret?: boolean },
   ) => { patch: Record<string, unknown>; invalidKeys: string[] }
 
-  it('仅下发与生效值有差异的键（36 键任意子集）', () => {
+  it('仅下发与生效值有差异的键（39 键任意子集）', () => {
     const values = draft({ config: SCHEMA_DEFAULTS })
     values.port = '9999'
     values.mode = 'forward'
@@ -487,7 +487,7 @@ describe('W6 失败守卫（客户端侧）— host edit-failed 中文错误可�
     expect(isConflictError({ code: 'onebot-settings/conflict', message: 'expectedRevision mismatch' })).toBe(true)
   })
 
-  it('host patch 白名单 36 键与 client patchSchema 同宽：新键可下发（契约同步核对）', () => {
+  it('host patch 白名单 39 键与 client patchSchema 同宽：新键可下发（契约同步核对）', () => {
     const updateSettings = descriptors[1] as { parameters: Array<{ codec: { schema: { parse(value: unknown): unknown } } }> }
     const patch = updateSettings.parameters[0].codec.schema.parse({
       traceEnabled: false, recordInbound: true, inboxRedact: false, injectEnabled: false, injectDryRun: true,
@@ -827,6 +827,9 @@ describe('T6 批 3 — 数字行内校验（UX §5.6：blur 触发、非法标�
       outboundIntervalPerCharMs: [0, undefined],
       outboundIntervalJitterPct: [0, 100],
       recentMessages: [0, 100],
+      quoteExpandDepth: [0, undefined],
+      forwardExpandDepth: [0, undefined],
+      forwardExpandCount: [1, undefined],
     })
     expect(Object.keys(NUMBER_RANGE)).toEqual(allFields.filter((field) => field.type === 'number').map((field) => field.key))
     expect(CLIENT_SOURCE).toContain('src/settings-remote.ts NUMBER_RANGE') // 来源常量注明

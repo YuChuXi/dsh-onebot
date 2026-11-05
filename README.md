@@ -26,11 +26,11 @@
 | 类别 | 能力 |
 |---|---|
 | 连接 | 反向 WS（NapCat ws-reverse 拨入，默认端口 8643）或正向 WS（拨出，默认 ws://127.0.0.1:3001）；断线自动重连（2s→60s 退避） |
-| 入站 | 私聊/群聊；载荷是 **JSON 记录数组**（按时间升序，末条为当前消息，其余是它之前最近的群聊窗口；记录含 qq/nickname/id/time/message，群主与管理员另有 role）；群聊窗口按持久化水位 `{time,id}` 从 `get_group_msg_history` 截取，滑出历史时标注「更早的消息已省略」，注入过的消息不再重复注入；段数组直读（无 CQ 字符串层）、@/回复触发（fail-closed；回复仅认机器人自己的消息，作者由 get_msg 证实，且与引用展开共用同一次查询）、媒体段回填本机路径（图片四路解析 url/base64/file/hash、大图自动压缩长边 ≤`inboundImageMaxPx`、GIF 不压、文件段双通道 get_private_file_url + get_file base64/url 回退），取不到时写成「(图片未取到)」这类明确说明；引用与合并转发在原位置展开为被引记录与节点记录；表情段带中文名；戳一戳唤醒，其他人之间的戳并入上文 |
-| 语音 | ffmpeg 转 16kHz WAV + whisper 转写（openai-whisper / whisper.cpp / 自定义命令）；**非阻塞**：语音消息先以 `record` 段（带本机路径）进入回合（不阻塞回复），转写完成后以「（语音转写：…）」补递（默认超时 60s）；转写失败/超时/空结果保留 `record` 段为最终状态 |
+| 入站 | 私聊/群聊；载荷是 **JSON 记录数组**（按时间升序，末条为当前消息，其余是它之前最近的群聊窗口；记录含 qq/nickname/id/time/message，群主与管理员另有 role）；群聊窗口按持久化水位 `{time,id}` 从 `get_group_msg_history` 截取，滑出历史时标注「更早的消息已省略」，注入过的消息不再重复注入；段数组直读（无 CQ 字符串层）、@/回复触发（fail-closed；回复仅认机器人自己的消息，作者由 get_msg 证实，且与引用展开共用同一次查询）、媒体段回填媒体目录内的文件名（完整路径前缀由系统提示词给出；图片四路解析 url/base64/file/hash、大图自动压缩长边 ≤`inboundImageMaxPx`、GIF 不压、文件段双通道 get_private_file_url + get_file base64/url 回退），取不到时写成「(图片未取到)」这类明确说明；引用与合并转发按 `quoteExpandDepth` / `forwardExpandDepth` 在原位置展开为被引记录与节点记录（默认 0 = 只保留 id），合并转发单次展开条数由 `forwardExpandCount` 限制（外层余额按内层转发数量均分）；表情段带中文名；戳一戳唤醒，其他人之间的戳并入上文 |
+| 语音 | ffmpeg 转 16kHz WAV + whisper 转写（openai-whisper / whisper.cpp / 自定义命令）；**非阻塞**：语音消息先以 `record` 段（带媒体文件名）进入回合（不阻塞回复），转写完成后以「（语音转写：…）」补递（默认超时 60s）；转写失败/超时/空结果保留 `record` 段为最终状态 |
 | 出站 | **模型调用 `qq_send_*` 工具才是唯一发言出口**：回合的助手文本不会自动发送（模型不发就是不发）；合并转发用 `qq_send_forward`（群/私聊）、按字数节流（基础间隔 300ms + 每字 60ms + ±30% 抖动，见下方三个配置键）、正在输入提示（set_input_status，仅私聊） |
 | 命令 | 斜杠命令（仅管理员）：`/new` 开新会话、`/session` 查看可切回历史会话并按序号切回、`/model` 查看或切换当前会话模型（`--default` 修改部署默认；无参输出两级序号列表，回复序号选 provider → 再回复序号选模型）；按会话类型的长期模型在设置页「私聊」「群聊」两块分别用下拉配置（`modelPrivate` / `modelGroup`）；`/compact` 转发宿主的上下文压缩命令；其余斜杠文本一律交给模型 |
-| 工具 | `qq_send_message`（唯一通用出口，支持文本/图片/语音/视频/文件段）、`qq_send_text`、`qq_send_image`（≤9 张，路径或 URL）、`qq_send_voice`、`qq_send_video`、`qq_send_file`、`qq_send_forward`、`qq_send_poke`（戳一戳）、`qq_list_stickers`（收藏表情列表）、`qq_send_sticker`（发表情：收藏/图片/商城）、`qq_collect_sticker`（收藏表情）、`qq_napcat_api`（22 个白名单 action）、`qq_end_turn`（结束回合）、`qq_create_schedule` / `qq_list_schedules` / `qq_delete_schedule` / `qq_update_schedule`（群/私聊定时任务，规则与 dsh 的 `schedule_*` 一致：相对延时、绝对时刻、固定间隔、每日、每周、cron）、`qq_group_history`、`qq_model`（查看生效模型与配置指定；切换当前会话或部署默认的模型/思考强度）、文件编辑工具 `code_safe_edit` 等已拆至独立插件 dsh-safe-edit（见下文「安全编辑」） |
+| 工具 | `qq_send_message`（唯一通用出口，支持文本/图片/语音/视频/文件段）、`qq_send_text`、`qq_send_image`（≤9 张，路径或 URL）、`qq_send_voice`、`qq_send_video`、`qq_send_file`、`qq_send_forward`、`qq_send_poke`（戳一戳）、`qq_list_stickers`（按图像描述检索本地表情库）、`qq_send_sticker`（按序号/描述/图片/商城表情发送）、`qq_collect_sticker`（批量收藏，描述必填）、`qq_remark_sticker`（修改描述）、`qq_napcat_api`（20 个白名单 action）、`qq_end_turn`（结束回合）、`qq_create_schedule` / `qq_list_schedules` / `qq_delete_schedule` / `qq_update_schedule`（群/私聊定时任务，规则与 dsh 的 `schedule_*` 一致：相对延时、绝对时刻、固定间隔、每日、每周、cron）、`qq_group_history`、`qq_model`（查看生效模型与配置指定；切换当前会话或部署默认的模型/思考强度）、文件编辑工具 `code_safe_edit` 等已拆至独立插件 dsh-safe-edit（见下文「安全编辑」） |
 | 权限 | 管理员白名单（`ONEBOT_ALLOWED_USERS`）、dm/group 策略（open/allowlist/disabled）、群聊 @提及 gating、受限用户 [受限用户:仅问答] 软限制 |
 | 会话 | 每个 QQ 会话一个持久 Agent（session id 稳定派生），重启后自动 resume；按 `agentPreset`/`workspacePath` 挂载到 preset 与工作区；每轮结束 flush 落盘 |
 | 运维 | 热加载：profile 层 patch 的 **config 覆盖**与 **insert 新增/删除**均热生效——插件 fiber 秒级原地重启（宿主进程不重启；代价：QQ 桥一次秒级重连、在途回合中断）；touch/内容未变不触发任何动作；bundle 自带 patch、仓库模板、部署副本的 patch 文件与根配置 `cordis.yml` 的改动**不**热生效；临时媒体 TTL 过期清理 |
@@ -158,6 +158,9 @@ WS 连接、图片下载、文件解析都依赖这条网络通路；NapCat 与 
 | `ignoreSelf` | `true` | 忽略机器人自己发出的消息（防自循环） |
 | `requireMention` | `true` | 群聊需 @ 或回复机器人的消息才响应；仅靠引用触发时通过 `get_msg.sender.user_id` 确认原作者，回复他人、作者未知或查询失败均不触发（fail-closed）。显式 @机器人不受引用查询结果影响 |
 | `recentMessages` | `50` | 每次 @ 注入的记录总条数（含当前消息；顶部「更早的消息已省略」那条不计数；`0` = 只注入当前消息，范围 0–100）。群聊按水位从当前消息向前截取，私聊只有当前消息 |
+| `quoteExpandDepth` | `0` | 引用的自动展开层级：`0` = 不展开，`reply` 段只保留 `id`（模型可用 `get_msg` 补取）；`1` = 展开一层被引消息，被引消息内的引用/转发按各自配置的剩余层级继续处理；以此类推 |
+| `forwardExpandDepth` | `0` | 合并转发的自动展开层级：`0` = 不展开，`forward` 段只保留 `id`（模型可用 `get_forward_msg` 补取）；`1` = 展开一层节点，节点内的引用/转发按各自配置的剩余层级继续处理；以此类推 |
+| `forwardExpandCount` | `20` | 合并转发单次展开的消息条数上限（嵌套转发共享）：外层先展开该数量的节点，外层实际条数不足时，剩余额度按内层转发数量均分 |
 | `sleepMode` | `window` | 休眠模式：`window` = 用 `sleepStart`/`sleepEnd` 的每日时段；`peak` = 按高峰价格时段休眠（北京时间工作日 9:00–12:00、14:00–18:00） |
 | `sleepStart` / `sleepEnd` | 空 | 休眠时段（HH:MM，Asia/Shanghai 墙钟，可跨午夜如 `23:30`–`08:00`）；留空 = 不启用，起止须同时设置且不同。休眠期间不响应唤醒，每个会话每个时段把首个唤醒交给模型回一句告别，之后静默 |
 | `dedupWindowSeconds` | `300` | 入站消息去重窗口（秒，W2-②）：同一会话内相同 message_id 在该窗口内重投（断线重连重放等）只处理第一条，后续静默跳过并记 debug；仅对会触发回复处理的消息事件生效（notice/meta 类不经过此闸）；`0` = 禁用去重 |
@@ -204,13 +207,15 @@ WS 连接、图片下载、文件解析都依赖这条网络通路；NapCat 与 
 | `workspacePath` | 空 | 会话挂载的工作区（留空=宿主进程 cwd；未配置时插件启动会 warn 一次建议显式配置——宿主未提供可编程查询的默认工作区）。per-chat 覆盖随映射文件持久化，重启不丢 |
 | `chatIdleEvictDays` | `7` | 会话空闲淘汰天数：chat 超过该天数无任何活动时，在下一条入站消息处理前清理其内存态 agent（会话先 flush 落盘、映射保留，同一 chat 之后再发消息可 resume 恢复原会话）；`0` = 禁用 |
 
+`dedupWindowSeconds` 属调优项，通过 profile patch 的 `config` 覆盖配置，不进入设置页面板；引用与转发的三个展开参数已在设置页「行为」组提供。
+
 > **BREAKING（M0 安全加固）**：reverse 模式下 `accessToken` 留空会拒绝启动（fail-closed）；`host` 默认从 `0.0.0.0` 改为 `127.0.0.1`（仅本机监听），跨机部署需显式配置 `host: 0.0.0.0`。
 
 环境变量：`ONEBOT_ALLOWED_USERS`（逗号分隔管理员）、`ONEBOT_ALLOW_ALL_USERS=true`（开发用）。
 
 ### 引用唤醒的查询成本与诊断
 
-开启 `requireMention` 时，通过群策略与去重检查、机器人身份已知且没有显式 @ 的有效引用消息，每条都会发起一次 `get_msg` 来确认原作者，群友之间互相引用也一样。校验通过后，引用展开复用该响应，不再重复查询。当前不使用跨消息缓存，如高流量群出现瓶颈再考虑缓存优化。
+开启 `requireMention` 时，通过群策略与去重检查、机器人身份已知且没有显式 @ 的有效引用消息，每条都会发起一次 `get_msg` 来确认原作者，群友之间互相引用也一样。开启 `quoteExpandDepth` 时，校验通过后的引用展开复用该响应，不再重复查询；`quoteExpandDepth` 为 0 时不做展开查询。当前不使用跨消息缓存，如高流量群出现瓶颈再考虑缓存优化。
 
 引用 ID 只接受可精确表示的十进制整数（支持负数），无效 ID 不发起查询。开启 trace 后，`mention` 阶段会区分无效 ID、查询失败或空响应、作者缺失、作者非机器人与普通未提及，便于排查拒绝原因。显式 @、私聊及关闭提及门控时，无效引用仅跳过展开，不阻断当前消息。
 
@@ -227,7 +232,7 @@ WS 连接、图片下载、文件解析都依赖这条网络通路；NapCat 与 
 dsh Web GUI 的设置页提供本插件的可视化配置（host-plane Remote `onebotSettings`，写入 profile 层
 `cordis.patch.yml` 中 `dsh-onebot` 条目的 config 覆盖行——与手改 patch、宿主原生设置页是同一个持久层）。
 
-### 六组 37 键
+### 六组 39 键
 
 设置页按「私聊」「群聊」分成两个大块：该类型的准入（策略/白名单）、模型、思考强度、附加提示词都在
 块内；全局项留在「连接」「权限」「行为」「诊断」。模型与思考强度都是下拉（模型为 provider → model
@@ -239,7 +244,7 @@ dsh Web GUI 的设置页提供本插件的可视化配置（host-plane Remote `o
 | private（私聊） | `modelPrivate`、`thinkingPrivate`、`extraPromptPrivate`、`dmPolicy`、`allowFrom` |
 | group（群聊） | `modelGroup`、`thinkingGroup`、`extraPromptGroup`、`requireMention`、`groupPolicy`、`groupAllowFrom` |
 | permissions（权限） | `adminUsers`、`allowAllUsers` |
-| behavior（行为） | `sendErrorNotice`、`outboundIntervalBaseMs`、`outboundIntervalPerCharMs`、`outboundIntervalJitterPct`、`recentMessages`、`steerEnabled`、`steerAllMembers`、`steerAllowRestricted`、`sleepMode`、`sleepStart`、`sleepEnd` |
+| behavior（行为） | `sendErrorNotice`、`outboundIntervalBaseMs`、`outboundIntervalPerCharMs`、`outboundIntervalJitterPct`、`recentMessages`、`quoteExpandDepth`、`forwardExpandDepth`、`forwardExpandCount`、`steerEnabled`、`steerAllMembers`、`steerAllowRestricted`、`sleepMode`、`sleepStart`、`sleepEnd` |
 | diagnostics（诊断） | `traceEnabled`、`recordInbound`、`inboxRedact`、`injectEnabled`、`injectDryRun` |
 
 `accessToken` 在设置页做密码型输入，快照返回侧脱敏（不回显明文）；写入侧仍在 patch 文件明文落盘。
@@ -247,7 +252,7 @@ dsh Web GUI 的设置页提供本插件的可视化配置（host-plane Remote `o
 ### 与 patch config 的优先级
 
 **schema 默认值 ← bundle/底层 patch（继承层） ← profile 覆盖行（设置页写这里）**；同一层内后写的 patch
-条目胜出。设置页键与手改 patch 是同一层的同一行，不存在两套优先级。六组 37 键之外的键
+条目胜出。设置页键与手改 patch 是同一层的同一行，不存在两套优先级。六组 39 键之外的键
 （media/STT/性能/`agentPreset` 等低频键）不设 UI，仍在同一行 config 手改 patch。
 
 ### 生效方式

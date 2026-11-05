@@ -1,17 +1,23 @@
 /**
- * 表情包工具族：收藏表情列表、发送（收藏表情 / 图片 / 商城表情）、收藏。
+ * 表情工具族：以“表情包 / 表情摘要”定位，以详细描述辅助理解与检索。
  *
- * 收藏表情来自 NapCat 的 fetch_custom_face；发送收藏表情走 image 段
- * （URL + sub_type=1），商城表情走 mface 段；收藏走 add_custom_face，
- * 文件必须落在媒体目录内（NapCat 需要能读到该路径）。
+ * 表情只保存在插件媒体目录内。普通图片默认进入“我的收藏”；商城表情使用
+ * 固有 summary 作为摘要，并按 emoji_package_id 归属同一个表情包。发送时本地
+ * 图片读成 base64，商城表情按五字段原样重放。
  * @module dsh-onebot/tools/stickers
  */
 
+import { readFile, stat } from 'node:fs/promises'
+
+import { createCanvas, loadImage } from '@napi-rs/canvas'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 
 import type { ChatBridge } from '../bridge/index.js'
-import type { OneBotConnection } from '../onebot/connection.js'
+import {
+  DEFAULT_STICKER_PACK, type StickerChange, type StickerLibrary, type StickerMark, type StickerRecord, type StickerSource,
+} from '../media/stickers.js'
 import { isUrl, resolveContainedPath } from '../media/store.js'
 import { normalizeSegment } from '../onebot/segments.js'
 import type { OutboundSegment } from '../outbound/index.js'
@@ -19,65 +25,132 @@ import {
   CHAT_ID_PARAM, END_PARAM, mediaRoots, resolveChat, type MediaLimits, type RegisterTool,
 } from './shared.js'
 
-/** 重放商城表情需要的五个字段。 */
+/** 商城表情五字段。 */
 const MFACE_FIELDS: readonly string[] = ['summary', 'emoji_id', 'emoji_package_id', 'key', 'url']
-
-/** qq_list_stickers 一次最多读取的数量。 */
+/** 一次最多列出的表情数。 */
 const LIST_MAX = 100
-/** 一次最多下载预览的表情数量。 */
-const PREVIEW_MAX = 10
+/** 一套 QQ 表情的张数，也是预览拼图的上限。 */
+const PREVIEW_MAX = 16
+/** 预览拼图列数；16 张正好排成 4×4。 */
+const PREVIEW_COLUMNS = 4
+/** 预览单元格尺寸，与 QQ 表情的 300×300 规格一致。 */
+const CELL_SIZE = 300
+/** 单元格下方的摘要文字区高度。 */
+const CELL_LABEL_HEIGHT = 40
+/** 预览单元格总高度。 */
+const CELL_HEIGHT = CELL_SIZE + CELL_LABEL_HEIGHT
 
-/**
- * 取收藏表情 URL 列表。返回形状由 NapCat 决定，非数组按空列表处理。
- *
- * Args:
- *   connection (OneBotConnection): NapCat 调用通道。
- *   count (number): 读取数量。
- *
- * Returns:
- *   Promise<string[]>: 表情图片 URL。
- *
- * Callers:
- *   - `qq_list_stickers`、`qq_send_sticker`。
- */
-async function customFaceUrls(connection: OneBotConnection, count: number): Promise<string[]> {
-  const data = await connection.call('fetch_custom_face', { count }) as unknown
-  if (!Array.isArray(data)) return []
-  return data.filter((item): item is string => typeof item === 'string' && item !== '')
+/** 宿主附件服务的图片引用（@deepseek-ai/dsh-attachment 的 ImageAttachmentRef）。 */
+export type StickerImageRef = {
+  attachmentId: string
+  mediaType: string
+  bytes: number
+  width: number
+  height: number
+  name?: string
+}
+
+/** 宿主附件服务的最小接口。 */
+export type StickerImageStore = {
+  saveImage(input: {
+    data: Uint8Array
+    mediaType: 'image/png'
+    name?: string
+  }): Promise<StickerImageRef>
+}
+
+/** 工具输出里的一条表情。 */
+type StickerView = {
+  pack: string
+  summary: string
+  caption: string
+  market: boolean
+}
+
+/** 表情列表及可选的一套预览拼图。 */
+type StickerList = {
+  count: number
+  faces: StickerView[]
+  attachment?: StickerImageRef
 }
 
 /**
- * 校验并取出 mface 五字段；缺字段直接报错，避免把残缺段交给 NapCat。
+ * 把商城 summary 归一为定位摘要，只去掉 QQ 固有的一对方括号。
+ *
+ * Args:
+ *   summary (string): 商城表情固有摘要。
+ *
+ * Returns:
+ *   string: 用于显示与定位的简短摘要。
+ *
+ * Callers:
+ *   - `collectSources`。
+ */
+function marketSummary(summary: string): string {
+  const trimmed = summary.trim()
+  const match = /^\[(.+)\]$/.exec(trimmed)
+  return (match?.[1] ?? trimmed).trim()
+}
+
+/**
+ * 校验并取出商城表情五字段；缺字段直接报错。
  *
  * Args:
  *   value (unknown): 工具参数里的 mface 对象。
+ *   action (string): 调用方名称，用于错误信息。
  *
  * Returns:
- *   Record<string, string | number>: 五字段。
+ *   StickerMark: 完整的五字段。
  *
  * Callers:
- *   - `qq_send_sticker`。
+ *   - `stickerSegment`、`collectSources`。
  */
-function mfaceData(value: unknown): Record<string, string | number> {
-  if (value === null || typeof value !== 'object') throw new Error('qq_send_sticker: mface 需要对象')
+function stickerMark(value: unknown, action: string): StickerMark {
+  if (value === null || typeof value !== 'object') throw new Error(action + ': mface 需要对象')
   const raw = value as Record<string, unknown>
-  const data: Record<string, string | number> = {}
+  const mark: Record<string, string> = {}
   for (const field of MFACE_FIELDS) {
     const item = raw[field]
-    if ((typeof item === 'string' && item !== '') || typeof item === 'number') data[field] = item
-    else throw new Error('qq_send_sticker: mface 缺少 ' + field)
+    if (typeof item === 'string' && item !== '') mark[field] = item
+    else if (typeof item === 'number' && Number.isFinite(item)) mark[field] = String(item)
+    else throw new Error(action + ': mface 缺少 ' + field)
   }
-  return data
+  return mark as unknown as StickerMark
 }
 
 /**
- * 把发送参数解析成一条表情段：mface 原样重放，其余来源都发 image 段
- * 并标记 sub_type=1（NapCat 视为表情包）。
+ * 按表情包与摘要精确定位记录；省略表情包时要求全库只命中一条。
  *
  * Args:
- *   args (object): 工具参数（index / path / url / mface）。
- *   bridge (ChatBridge): 会话与媒体围栏。
- *   connection (OneBotConnection): 收藏表情列表来源。
+ *   records (StickerRecord[]): 本地表情库全部记录。
+ *   pack (string): 表情包名称；空串表示不限定。
+ *   summary (string): 表情摘要。
+ *
+ * Returns:
+ *   StickerRecord: 唯一命中的记录。
+ *
+ * Callers:
+ *   - `stickerSegment`。
+ */
+function pickSticker(records: StickerRecord[], pack: string, summary: string): StickerRecord {
+  const target = summary.toLowerCase()
+  const pool = records.filter(record => (pack === '' || record.pack === pack) && record.summary.toLowerCase() === target)
+  if (pool.length === 1) return pool[0]
+  if (pool.length === 0) {
+    const location = pack === '' ? '表情库' : '表情包「' + pack + '」'
+    throw new Error('qq_send_sticker: ' + location + '没有摘要「' + summary + '」')
+  }
+  const packs = [...new Set(pool.map(record => record.pack))]
+  throw new Error('qq_send_sticker: 摘要「' + summary + '」存在于多个表情包，请给 pack：' + packs.join('、'))
+}
+
+/**
+ * 把发送参数解析成一条表情段。
+ *
+ * Args:
+ *   args (object): 工具参数（pack+summary / path / url / mface）。
+ *   library (StickerLibrary): 本地表情库。
+ *   bridge (ChatBridge): 媒体围栏根来源。
  *   exec (ToolRunContext): 工具执行上下文。
  *   limits (MediaLimits): 媒体大小上限。
  *
@@ -88,28 +161,54 @@ function mfaceData(value: unknown): Record<string, string | number> {
  *   - `qq_send_sticker`。
  */
 async function stickerSegment(
-  args: { index?: unknown; path?: unknown; url?: unknown; mface?: unknown },
+  args: { pack?: unknown; summary?: unknown; path?: unknown; url?: unknown; mface?: unknown },
+  library: StickerLibrary,
   bridge: ChatBridge,
-  connection: OneBotConnection,
   exec: ToolRunContext,
   limits: MediaLimits,
 ): Promise<OutboundSegment> {
   if (args.mface !== undefined && args.mface !== null) {
-    return { type: 'mface', data: mfaceData(args.mface) }
+    return { type: 'mface', data: stickerMark(args.mface, 'qq_send_sticker') }
   }
-  const index = typeof args.index === 'number' ? Math.floor(args.index) : 0
+  const pack = typeof args.pack === 'string' ? args.pack.trim() : ''
+  const summary = typeof args.summary === 'string' ? args.summary.trim() : ''
   const path = typeof args.path === 'string' ? args.path : ''
   const url = typeof args.url === 'string' ? args.url : ''
-  if ([index > 0, path !== '', url !== ''].filter(Boolean).length !== 1) {
-    throw new Error('qq_send_sticker: index / path / url / mface 需要且只能给一个')
+  if (pack !== '' && summary === '') throw new Error('qq_send_sticker: pack 必须与 summary 一起使用')
+  if ([summary !== '', path !== '', url !== ''].filter(Boolean).length !== 1) {
+    throw new Error('qq_send_sticker: pack+summary / path / url / mface 需要且只能给一个')
   }
-  if (index > 0) {
-    const urls = await customFaceUrls(connection, index)
-    const target = urls[index - 1]
-    if (target === undefined) throw new Error('qq_send_sticker: 收藏表情没有第 ' + index + ' 张')
-    return { type: 'image', data: { file: target, sub_type: 1 } }
+  if (summary !== '') {
+    const record = pickSticker(await library.list(), pack, summary)
+    if (record.mark !== undefined) return { type: 'mface', data: record.mark }
+    return await localImageSegment(record.file, bridge, exec, limits)
   }
-  const source = path !== '' ? path : url
+  if (path !== '') return await localImageSegment(path, bridge, exec, limits)
+  if (!isUrl(url)) throw new Error('qq_send_sticker: url 不是 http(s) 地址')
+  return { type: 'image', data: { file: url, sub_type: 1 } }
+}
+
+/**
+ * 本机图片路径归一成可发送的 image 段（带表情标记）。
+ *
+ * Args:
+ *   source (string): 本机图片路径。
+ *   bridge (ChatBridge): 媒体围栏根来源。
+ *   exec (ToolRunContext): 工具执行上下文。
+ *   limits (MediaLimits): 媒体大小上限。
+ *
+ * Returns:
+ *   Promise<OutboundSegment>: 可发送段。
+ *
+ * Callers:
+ *   - `stickerSegment`。
+ */
+async function localImageSegment(
+  source: string,
+  bridge: ChatBridge,
+  exec: ToolRunContext,
+  limits: MediaLimits,
+): Promise<OutboundSegment> {
   const segment = await normalizeSegment(
     { type: 'image', data: { file: source, sub_type: 1 } },
     { allowedRoots: await mediaRoots(bridge, exec), ...limits },
@@ -119,13 +218,168 @@ async function stickerSegment(
 }
 
 /**
- * 注册表情包工具族。
+ * 将一套表情拼成一张 PNG，每格 300×300 并在下方标注摘要。
+ *
+ * Args:
+ *   records (StickerRecord[]): 要预览的记录，最多 16 条。
+ *   labelPack (boolean): 是否在标签前加表情包名，用于跨包预览。
+ *
+ * Returns:
+ *   Promise<Buffer>: PNG 图片字节。
+ *
+ * Callers:
+ *   - `qq_list_stickers`。
+ */
+async function stickerSheet(records: StickerRecord[], labelPack: boolean): Promise<Buffer> {
+  const rows = Math.ceil(records.length / PREVIEW_COLUMNS)
+  const canvas = createCanvas(PREVIEW_COLUMNS * CELL_SIZE, rows * CELL_HEIGHT)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#202124'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.font = '22px sans-serif'
+  for (let position = 0; position < records.length; position += 1) {
+    const record = records[position]
+    const column = position % PREVIEW_COLUMNS
+    const row = Math.floor(position / PREVIEW_COLUMNS)
+    const x = column * CELL_SIZE
+    const y = row * CELL_HEIGHT
+    const image = await loadImage(await readFile(record.file))
+    const scale = Math.min(CELL_SIZE / image.width, CELL_SIZE / image.height, 1)
+    const width = Math.max(1, Math.round(image.width * scale))
+    const height = Math.max(1, Math.round(image.height * scale))
+    ctx.drawImage(image, x + (CELL_SIZE - width) / 2, y + (CELL_SIZE - height) / 2, width, height)
+    ctx.fillStyle = '#f1f3f4'
+    ctx.fillText(
+      labelPack ? record.pack + '·' + record.summary : record.summary,
+      x + CELL_SIZE / 2,
+      y + CELL_SIZE + CELL_LABEL_HEIGHT / 2,
+      CELL_SIZE - 12,
+    )
+  }
+  return canvas.toBuffer('image/png')
+}
+
+/**
+ * 渲染表情列表及整套预览拼图：按表情包分组，组内逐条给出摘要与详细描述。
+ *
+ * Args:
+ *   value (StickerList): 工具返回值。
+ *
+ * Returns:
+ *   ContentBlock[]: 分组文本与一张预览图。
+ *
+ * Callers:
+ *   - `qq_list_stickers` 的 `output.render`。
+ */
+function listContent(value: StickerList): ContentBlock[] {
+  const faces = Array.isArray(value.faces) ? value.faces : []
+  const packs = new Map<string, StickerView[]>()
+  for (const face of faces) {
+    const bucket = packs.get(face.pack)
+    if (bucket === undefined) packs.set(face.pack, [face])
+    else bucket.push(face)
+  }
+  const lines = ['共 ' + value.count + ' 张，' + packs.size + ' 个表情包']
+  if (value.attachment !== undefined && faces.length > PREVIEW_MAX) {
+    lines.push('拼图只含前 ' + PREVIEW_MAX + ' 张')
+  }
+  for (const [pack, items] of packs) {
+    lines.push('【' + pack + '】' + items.length + ' 张')
+    for (const face of items) {
+      lines.push('- ' + face.summary + (face.caption === '' ? '（未填写详细描述）' : ' — ' + face.caption))
+    }
+  }
+  const blocks: ContentBlock[] = [{ type: 'text', text: lines.join('\n') }]
+  if (value.attachment !== undefined) blocks.push({ type: 'image', attachment: value.attachment as never })
+  return blocks
+}
+
+/**
+ * 把收藏参数逐项下载或解析为待入库来源，全部校验通过后才写库。
+ *
+ * Args:
+ *   items (unknown[]): 收藏项数组。
+ *   requestedPack (string): 调用方指定的表情包；空串表示自动确定。
+ *   records (StickerRecord[]): 当前记录，用于复用商城包名。
+ *   bridge (ChatBridge): 图片下载与媒体围栏根来源。
+ *   exec (ToolRunContext): 工具执行上下文。
+ *   limits (MediaLimits): 媒体大小上限。
+ *
+ * Returns:
+ *   Promise<StickerSource[]>: 完整的待入库来源。
+ *
+ * Callers:
+ *   - `qq_collect_sticker`。
+ */
+async function collectSources(
+  items: unknown[],
+  requestedPack: string,
+  records: StickerRecord[],
+  bridge: ChatBridge,
+  exec: ToolRunContext,
+  limits: MediaLimits,
+): Promise<StickerSource[]> {
+  const roots = await mediaRoots(bridge, exec)
+  const sources: StickerSource[] = []
+  for (let position = 0; position < items.length; position += 1) {
+    const label = 'qq_collect_sticker: 第 ' + (position + 1) + ' 项'
+    const item = items[position]
+    if (item === null || typeof item !== 'object') throw new Error(label + ' 需要对象')
+    const entry = item as { path?: unknown; url?: unknown; mface?: unknown; summary?: unknown; caption?: unknown }
+    const path = typeof entry.path === 'string' ? entry.path : ''
+    const url = typeof entry.url === 'string' ? entry.url : ''
+    const hasMface = entry.mface !== undefined && entry.mface !== null
+    if ([path !== '', url !== '', hasMface].filter(Boolean).length !== 1) {
+      throw new Error(label + ': path / url / mface 需要且只能给一个')
+    }
+    const caption = typeof entry.caption === 'string' ? entry.caption.trim() : ''
+    let file = ''
+    let pack = requestedPack
+    let summary = typeof entry.summary === 'string' ? entry.summary.trim() : ''
+    let mark: StickerMark | undefined
+    if (hasMface) {
+      mark = stickerMark(entry.mface, label)
+      if (!isUrl(mark.url)) throw new Error(label + ': mface.url 不是 http(s) 地址')
+      summary = marketSummary(mark.summary)
+      if (summary === '') throw new Error(label + ': 商城表情 summary 为空')
+      if (pack === '') {
+        const packs = [...new Set(records.filter(record => record.mark?.emoji_package_id === mark?.emoji_package_id).map(record => record.pack))]
+        if (packs.length === 1) pack = packs[0]
+        else if (packs.length > 1) throw new Error(label + ': emoji_package_id 对应多个表情包，请显式给 pack')
+      }
+      if (pack === '') throw new Error(label + ': 新商城表情包必须给 pack（例如「柰子鱼3」）')
+      file = await bridge.saveSticker(mark.url)
+    } else {
+      if (summary === '') throw new Error(label + ' 缺少 summary（普通图片需要简短摘要）')
+      if (caption === '') throw new Error(label + ' 缺少 caption（普通图片需要详细描述）')
+      if (pack === '') pack = DEFAULT_STICKER_PACK
+      if (url !== '') {
+        if (!isUrl(url)) throw new Error(label + ': url 不是 http(s) 地址')
+        file = await bridge.saveSticker(url)
+      } else {
+        const resolved = await resolveContainedPath(roots, path)
+        if (resolved === null) throw new Error(label + ': path 不在允许的媒体目录内')
+        file = resolved
+      }
+    }
+    const info = await stat(file)
+    if (info.size > limits.maxImageBytes) throw new Error(label + ': 表情图片超过 ' + limits.maxImageBytes + ' 字节')
+    sources.push({ file, pack, summary, caption, ...(mark === undefined ? {} : { mark }) })
+  }
+  return sources
+}
+
+/**
+ * 注册表情工具族。
  *
  * Args:
  *   register (RegisterTool): 工具注册回调。
- *   bridge (ChatBridge): 出站发送与媒体下载的桥接对象。
- *   connection (OneBotConnection): NapCat 调用通道。
+ *   bridge (ChatBridge): 出站发送、媒体下载与围栏根来源。
+ *   library (StickerLibrary): 本地表情库。
  *   limits (MediaLimits): 媒体大小上限。
+ *   images (() => StickerImageStore | undefined): 宿主附件服务访问器。
  *
  * Returns:
  *   void
@@ -136,46 +390,62 @@ async function stickerSegment(
 export function registerStickerTools(
   register: RegisterTool,
   bridge: ChatBridge,
-  connection: OneBotConnection,
+  library: StickerLibrary,
   limits: MediaLimits,
+  images: () => StickerImageStore | undefined,
 ): void {
   register(defineTool({
     name: 'qq_list_stickers',
-    description: '列出收藏表情（自定义表情）：返回序号与图片 URL；preview 可把前几张下载到本机供查看内容。',
+    description: '列出表情包及其中每张表情的摘要与详细描述。可按表情包或关键词筛选；preview=true 时把命中结果拼成一张总览图，便于一次看完整套表情后批量补写描述。',
     parameters: {
-      count: { type: 'number', description: '读取数量（默认 48，最多 100）' },
-      preview: { type: 'number', description: '把前 N 张下载到本机并返回路径，便于查看；默认 0，最多 10' },
+      pack: { type: 'string', description: '只看指定表情包，例如「柰子鱼3」或「我的收藏」' },
+      query: { type: 'string', description: '在表情包、摘要、详细描述中做子串检索，忽略大小写' },
+      count: { type: 'number', description: '返回数量（默认 100，最多 100）' },
+      preview: { type: 'boolean', description: '生成一张 4×4 的整套预览拼图（最多 16 张）；默认 false' },
     },
-    output: {
-      schema: { type: 'json' },
-      render: (_args, value) => {
-        const v = value as { faces?: unknown }
-        const total = Array.isArray(v.faces) ? v.faces.length : 0
-        return [{ type: 'text', text: '收藏表情 ' + total + ' 张' }]
-      },
-    },
+    output: { schema: { type: 'json' }, render: (_args, value) => listContent(value as StickerList) },
     isConcurrencySafe: () => true,
     execute: async args => {
-      const a = args as { count?: unknown; preview?: unknown }
-      const count = Math.min(Math.max(typeof a.count === 'number' ? Math.floor(a.count) : 48, 1), LIST_MAX)
-      const urls = await customFaceUrls(connection, count)
-      const preview = Math.min(Math.max(typeof a.preview === 'number' ? Math.floor(a.preview) : 0, 0), PREVIEW_MAX, urls.length)
-      const faces: Array<{ index: number; url: string; path?: string }> = []
-      for (let i = 0; i < urls.length; i += 1) {
-        faces.push(i < preview
-          ? { index: i + 1, url: urls[i], path: await bridge.saveSticker(urls[i]) }
-          : { index: i + 1, url: urls[i] })
+      const a = args as { pack?: unknown; query?: unknown; count?: unknown; preview?: unknown }
+      const pack = typeof a.pack === 'string' ? a.pack.trim() : ''
+      const query = typeof a.query === 'string' ? a.query.trim().toLowerCase() : ''
+      const count = Math.min(Math.max(typeof a.count === 'number' ? Math.floor(a.count) : LIST_MAX, 1), LIST_MAX)
+      const preview = a.preview === true
+      const all = await library.list()
+      const matched = all.filter(record => (pack === '' || record.pack === pack) &&
+        (query === '' || (record.pack + '\n' + record.summary + '\n' + record.caption).toLowerCase().includes(query)))
+      const records = matched.slice(0, count)
+      const result: StickerList = {
+        count: matched.length,
+        faces: records.map(record => ({
+          pack: record.pack,
+          summary: record.summary,
+          caption: record.caption,
+          market: record.mark !== undefined,
+        })),
       }
-      return { count: faces.length, faces }
+      if (preview && records.length > 0) {
+        const store = images()
+        if (store === undefined) throw new Error('qq_list_stickers: 宿主未挂载附件服务，无法生成预览')
+        const shown = records.slice(0, PREVIEW_MAX)
+        const packs = new Set(shown.map(record => record.pack))
+        result.attachment = await store.saveImage({
+          data: await stickerSheet(shown, packs.size > 1),
+          mediaType: 'image/png',
+          name: (pack || '表情库') + '预览.png',
+        })
+      }
+      return result
     },
   }))
 
   register(defineTool({
     name: 'qq_send_sticker',
-    description: '发送表情：收藏表情按序号（先看 qq_list_stickers）、本地图片路径、图片 URL，或商城表情 mface 对象。',
+    description: '发送表情。库内表情用 pack+summary 定位（例如 pack=柰子鱼3、summary=飞天猫猫）；全库摘要唯一时可省略 pack。详细描述 caption 不参与发送定位。另支持本地路径、URL 或 mface 五字段。',
     parameters: {
       chat_id: CHAT_ID_PARAM,
-      index: { type: 'number', description: '收藏表情序号（从 1 开始，见 qq_list_stickers）' },
+      pack: { type: 'string', description: '表情包名称；与 summary 配合使用。全库摘要唯一时可省略' },
+      summary: { type: 'string', description: '表情摘要，例如「飞天猫猫」；不是详细描述' },
       path: { type: 'string', description: '本地表情图片路径（须在允许的媒体目录内）' },
       url: { type: 'string', description: '表情图片 URL，由 NapCat 下载后发送' },
       mface: { type: 'object', additionalProperties: true, description: '商城表情五字段：summary、emoji_id、emoji_package_id、key、url' },
@@ -190,9 +460,11 @@ export function registerStickerTools(
     },
     isConcurrencySafe: () => false,
     execute: async (args, exec) => {
-      const a = args as { chat_id?: unknown; index?: unknown; path?: unknown; url?: unknown; mface?: unknown; end?: unknown }
+      const a = args as {
+        chat_id?: unknown; pack?: unknown; summary?: unknown; path?: unknown; url?: unknown; mface?: unknown; end?: unknown
+      }
       const chatId = resolveChat(bridge, exec, a.chat_id)
-      const segment = await stickerSegment(a, bridge, connection, exec, limits)
+      const segment = await stickerSegment(a, library, bridge, exec, limits)
       const messageId = await bridge.sendSegments(chatId, [segment])
       if (a.end === true) exec.concludeTurn()
       return { sent: true, messageId: messageId ?? null }
@@ -201,54 +473,97 @@ export function registerStickerTools(
 
   register(defineTool({
     name: 'qq_collect_sticker',
-    description: '收藏表情：把本地图片、图片 URL 或收到的商城表情加入自定义表情。NapCat 必须能读到最后的本机路径。',
+    description: '批量收藏到同一个表情包。普通图片进入「我的收藏」，每项必须给 summary（简短摘要）和 caption（详细描述）；商城表情一次传入整套 mface，pack 给商城包名，summary 自动取固有值，caption 可先看整套预览后批量补写。',
     parameters: {
-      path: { type: 'string', description: '本地图片路径（须在允许的媒体目录内）' },
-      url: { type: 'string', description: '图片 URL（先下载到媒体目录再收藏）' },
-      mface: { type: 'object', additionalProperties: true, description: '商城表情：至少给 url，emoji_id / emoji_package_id 用于标记来源' },
-      name: { type: 'string', description: '收藏后的文件名（可选）' },
+      pack: { type: 'string', description: '表情包名称。新商城表情包必填；已收录的商城包可按 emoji_package_id 自动复用；普通图片省略时为「我的收藏」' },
+      items: {
+        type: 'array',
+        required: true,
+        description: '普通项：{path 或 url, summary, caption}；商城项：{mface, caption?}。caption 是详细描述，summary 是定位摘要',
+        items: { type: 'object', additionalProperties: true },
+      },
     },
     output: {
       schema: { type: 'json' },
-      render: () => [{ type: 'text', text: '已收藏表情' }],
+      render: (_args, value) => {
+        const v = value as { collected?: Array<{ pack?: unknown; summary?: unknown }> }
+        const lines = (v.collected ?? []).map(item => '【' + String(item.pack ?? '') + '】' + String(item.summary ?? ''))
+        return [{ type: 'text', text: '已收藏 ' + lines.length + ' 张：' + lines.join('，') }]
+      },
     },
-    isConcurrencySafe: () => true,
+    isConcurrencySafe: () => false,
     execute: async (args, exec) => {
-      const a = args as { path?: unknown; url?: unknown; mface?: unknown; name?: unknown }
-      const mface = a.mface !== null && typeof a.mface === 'object' ? a.mface as Record<string, unknown> : undefined
-      const path = typeof a.path === 'string' ? a.path : ''
-      const url = typeof a.url === 'string' ? a.url : ''
-      if ([mface !== undefined, path !== '', url !== ''].filter(Boolean).length !== 1) {
-        throw new Error('qq_collect_sticker: path / url / mface 需要且只能给一个')
+      const a = args as { pack?: unknown; items?: unknown }
+      if (!Array.isArray(a.items) || a.items.length === 0) throw new Error('qq_collect_sticker: items 需要非空数组')
+      const pack = typeof a.pack === 'string' ? a.pack.trim() : ''
+      const records = await library.list()
+      const sources = await collectSources(a.items, pack, records, bridge, exec, limits)
+      const collected = await library.addMany(sources)
+      return {
+        count: collected.length,
+        collected: collected.map(record => ({
+          pack: record.pack,
+          summary: record.summary,
+          caption: record.caption,
+          md5: record.md5,
+          ...(record.mark === undefined ? {} : { mark: record.mark }),
+        })),
       }
-      let file = ''
-      let emojiId = ''
-      let packageId = 0
-      let isMarkFace = false
-      if (mface !== undefined) {
-        const faceUrl = typeof mface.url === 'string' ? mface.url : ''
-        if (!isUrl(faceUrl)) throw new Error('qq_collect_sticker: mface.url 不是有效 URL')
-        file = await bridge.saveSticker(faceUrl)
-        emojiId = mface.emoji_id !== undefined && mface.emoji_id !== null ? String(mface.emoji_id) : ''
-        const packageRaw = mface.emoji_package_id
-        packageId = typeof packageRaw === 'number' && Number.isFinite(packageRaw) ? packageRaw
-          : typeof packageRaw === 'string' && /^\d+$/.test(packageRaw) ? Number(packageRaw) : 0
-        isMarkFace = true
-      } else if (url !== '') {
-        if (!isUrl(url)) throw new Error('qq_collect_sticker: url 不是有效 URL')
-        file = await bridge.saveSticker(url)
-      } else {
-        const resolved = await resolveContainedPath(await mediaRoots(bridge, exec), path)
-        if (resolved === null) throw new Error('qq_collect_sticker: path 不在允许的媒体目录内')
-        file = resolved
+    },
+  }))
+
+  register(defineTool({
+    name: 'qq_remark_sticker',
+    description: '按 pack+summary 批量修改表情摘要或详细描述。summary 是定位用的现有短摘要，newSummary 用于改名，caption 是画面、情绪和语境的详细描述；未给的字段保持不变。',
+    parameters: {
+      items: {
+        type: 'array',
+        required: true,
+        description: '每项 {pack, summary, newSummary?, caption?}，至少给 newSummary 或 caption；caption 可为空串表示清除',
+        items: { type: 'object', additionalProperties: true },
+      },
+    },
+    output: {
+      schema: { type: 'json' },
+      render: (_args, value) => {
+        const v = value as { updated?: Array<{ pack?: unknown; summary?: unknown }> }
+        const lines = (v.updated ?? []).map(item => '【' + String(item.pack ?? '') + '】' + String(item.summary ?? ''))
+        return [{ type: 'text', text: '已更新 ' + lines.length + ' 张：' + lines.join('，') }]
+      },
+    },
+    isConcurrencySafe: () => false,
+    execute: async args => {
+      const a = args as { items?: unknown }
+      if (!Array.isArray(a.items) || a.items.length === 0) throw new Error('qq_remark_sticker: items 需要非空数组')
+      const records = await library.list()
+      const changes: StickerChange[] = []
+      const located = new Set<string>()
+      for (let position = 0; position < a.items.length; position += 1) {
+        const item = a.items[position]
+        const label = 'qq_remark_sticker: 第 ' + (position + 1) + ' 项'
+        if (item === null || typeof item !== 'object') throw new Error(label + ' 需要对象')
+        const entry = item as { pack?: unknown; summary?: unknown; newSummary?: unknown; caption?: unknown }
+        const pack = typeof entry.pack === 'string' ? entry.pack.trim() : ''
+        const summary = typeof entry.summary === 'string' ? entry.summary.trim() : ''
+        if (pack === '') throw new Error(label + ' 需要 pack')
+        if (summary === '') throw new Error(label + ' 需要 summary')
+        if (entry.newSummary === undefined && entry.caption === undefined) throw new Error(label + ' 需要 newSummary 或 caption')
+        const key = pack + '\0' + summary
+        if (located.has(key)) throw new Error(label + ': 同一次调用重复定位「' + pack + ' / ' + summary + '」')
+        located.add(key)
+        if (!records.some(record => record.pack === pack && record.summary === summary)) {
+          throw new Error(label + ': 表情包「' + pack + '」没有摘要「' + summary + '」')
+        }
+        const newSummary = entry.newSummary === undefined ? undefined : typeof entry.newSummary === 'string' ? entry.newSummary.trim() : ''
+        if (newSummary === '') throw new Error(label + ' newSummary 不能为空')
+        const caption = entry.caption === undefined ? undefined : typeof entry.caption === 'string' ? entry.caption.trim() : ''
+        changes.push({ pack, summary, ...(newSummary === undefined ? {} : { newSummary }), ...(caption === undefined ? {} : { caption }) })
       }
-      const params: Record<string, unknown> = { file }
-      if (emojiId !== '') params.emoji_id = emojiId
-      if (packageId !== 0) params.package_id = packageId
-      if (isMarkFace) params.is_mark_face = true
-      if (typeof a.name === 'string' && a.name !== '') params.file_name = a.name
-      await connection.call('add_custom_face', params)
-      return { collected: true, file, emojiId, packageId, isMarkFace }
+      const updated = await library.remarkMany(changes)
+      return {
+        count: updated.length,
+        updated: updated.map(record => ({ pack: record.pack, summary: record.summary, caption: record.caption })),
+      }
     },
   }))
 }

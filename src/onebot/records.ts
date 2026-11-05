@@ -141,7 +141,7 @@ export function renderRecord(record: ConversationRecord): RenderedRecord | Notic
  *   string: JSON 数组文本。
  *
  * Callers:
- *   - `src/inbound/index.ts:InboundPipeline.processInbound`、`sleepTurn`。
+ *   - `src/inbound/index.ts:InboundPipeline.processInbound`、`sleepTurn`、`wakeWithNote`。
  */
 export function formatRecords(records: ConversationRecord[]): string {
   return JSON.stringify(records.map(renderRecord))

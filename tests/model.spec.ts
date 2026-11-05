@@ -129,7 +129,7 @@ async function makeHarness(opts?: {
     maxImageBytes: 1_000_000,
     maxVoiceBytes: 1_000_000,
     maxFileBytes: 1_000_000,
-  })
+  }, '/tmp')
   const tool = (name: string): ToolLike => {
     const found = tools.find(candidate => candidate.name === name)
     if (found === undefined) throw new Error('tool not registered: ' + name)

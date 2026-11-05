@@ -8,6 +8,8 @@ import type { ChatSettings } from '../registry/index.js';
 import type { NormalizedInbound, RawMessage } from './normalize.js';
 /** W2-② 去重窗口的默认秒数，与 MIT 竞品的 dedupWindowSeconds 对齐。 */
 export declare const DEFAULT_DEDUP_WINDOW_SECONDS = 300;
+/** 合并转发单次展开的消息条数上限默认值；层级由 forwardExpandDepth 控制。 */
+export declare const DEFAULT_FORWARD_EXPAND_COUNT = 20;
 /** W2-② 去重窗口映射的条目上限（LRU 淘汰），防止 message_id 洪水撑爆内存。 */
 export declare const DEDUP_MAX_ENTRIES = 4096;
 /** 管线需要的桥接能力（比 BridgeDeps 窄：只列它真正读写的）。 */
@@ -44,6 +46,12 @@ export interface InboundContext {
         dedupWindowSeconds: number;
         /** 上文窗口条数上限（含触发消息）；0 = 只注入触发消息。 */
         recentMessages: number;
+        /** 引用的自动展开层级；0 = 不展开。 */
+        quoteExpandDepth: number;
+        /** 合并转发的自动展开层级；0 = 不展开。 */
+        forwardExpandDepth: number;
+        /** 合并转发单次展开的消息条数上限；外层余额按内层转发数量均分。 */
+        forwardExpandCount: number;
         /** 休眠模式：window（每日窗口）/ peak（高峰时段）。 */
         sleepMode: string;
         /** 休眠窗口起点 HH:MM。 */
@@ -158,8 +166,8 @@ export declare class InboundPipeline {
      */
     private parseOf;
     /**
-     * 一条消息 → 一条记录，没有例外：触发消息、窗口行、被引消息、转发节点
-     * 都走这里，只有它构造记录。媒体换成本机路径，@ 补名字，引用/转发展开。
+     * 一条消息 → 一条记录，没有例外：触发消息、窗口行都走这里，只有它构造记录。
+     * 媒体换成媒体目录内的文件名，@ 补名字，引用/转发按配置的层级展开。
      *
      * Args:
      *   message (RawMessage): OneBot 消息对象。
@@ -169,7 +177,7 @@ export declare class InboundPipeline {
      *   MessageRecord: 记录。
      *
      * Callers:
-     *   - `processInbound`、`sleepTurn`、`expandQuote`、`expandForward`。
+     *   - `processInbound`、`sleepTurn`、`wakeWithNote`。
      */
     recordOf(message: RawMessage, chatId: ChatId): Promise<MessageRecord>;
     /**
@@ -187,7 +195,7 @@ export declare class InboundPipeline {
      */
     private normalizedSegments;
     /**
-     * 把每个媒体占位换成它的本机路径；取不到字节时写成明确的「未取到」。
+     * 把每个媒体占位换成媒体目录内的文件名；取不到字节时写成明确的「未取到」。
      *
      * Args:
      *   segments (Segment[]): 段数组（原地修改）。
@@ -217,17 +225,21 @@ export declare class InboundPipeline {
     private fillSegmentAtNames;
     /**
      * 带外内容就地展开：引用取被引消息、合并转发取节点列表，
-     * 展开结果仍是段，位置不变。
+     * 展开结果仍是段，位置不变。引用与转发各自使用独立的剩余层级。
      *
      * Args:
      *   segments (Segment[]): 段数组。
      *   chatId (ChatId): 会话 id。
+     *   quoteDepth (number): 还能展开的引用层级；<=0 时引用只保留 id。
+     *   forwardDepth (number): 还能展开的转发层级；<=0 时转发只保留 id。
+     *   forwardLimit (number): 本层每一条合并转发可展开的消息条数。
      *
      * Returns:
      *   Promise<Segment[]>: 展开后的段数组。
      *
      * Callers:
-     *   - `recordOf`。
+     *   - `recordOf`（顶层记录）。
+     *   - `expandQuote`、`expandForward`（嵌套内容）。
      */
     private expandSegments;
     /**
@@ -248,11 +260,15 @@ export declare class InboundPipeline {
     private rememberQuoted;
     /**
      * 把一条引用展开成 reply 段：被引消息成为该段的 `message`（自己的记录形状，
-     * 媒体已本地化）。取不到时只保留 id，模型仍可用 get_msg 自查。
+     * 媒体已本地化，嵌套引用/转发按剩余预算继续展开）。取不到时只保留 id，
+     * 模型仍可用 get_msg 自查。
      *
      * Args:
      *   messageId (string): 被引消息 id。
      *   chatId (ChatId): 会话 id。
+     *   quoteDepth (number): 被引消息内还能展开的引用层级。
+     *   forwardDepth (number): 被引消息内还能展开的转发层级。
+     *   forwardLimit (number): 被引消息内合并转发可展开的消息条数。
      *
      * Returns:
      *   Promise<Segment>: reply 段。
@@ -263,11 +279,15 @@ export declare class InboundPipeline {
     private expandQuote;
     /**
      * 把一条合并转发展开成 forward 段：节点列表就是记录数组，节点媒体本地化。
-     * 取不到时只保留 id，模型仍可用 get_forward_msg 自查。
+     * 先按 `limit` 展开外层节点；外层节点数不足时，剩余额度按内层转发数量
+     * 均分给每个内层合并转发。取不到时只保留 id，模型仍可用 get_forward_msg 自查。
      *
      * Args:
      *   forwardId (string): 合并转发 id。
      *   chatId (ChatId): 会话 id。
+     *   quoteDepth (number): 节点内容还能展开的引用层级。
+     *   forwardDepth (number): 节点内容还能展开的转发层级。
+     *   limit (number): 本条合并转发可展开的消息条数。
      *
      * Returns:
      *   Promise<Segment>: forward 段。
@@ -430,6 +450,45 @@ export declare class InboundPipeline {
      *   - `applyTurnSideEffects`（不等待）。
      */
     private transcribeLater;
+    /**
+     * 引用的自动展开层级。
+     *
+     * Args:
+     *   无。
+     *
+     * Returns:
+     *   number: 层级；未配置时为 0（不展开）。
+     *
+     * Callers:
+     *   - `recordOf`。
+     */
+    private quoteExpandDepth;
+    /**
+     * 合并转发的自动展开层级。
+     *
+     * Args:
+     *   无。
+     *
+     * Returns:
+     *   number: 层级；未配置时为 0（不展开）。
+     *
+     * Callers:
+     *   - `recordOf`。
+     */
+    private forwardExpandDepth;
+    /**
+     * 合并转发单次展开的消息条数。
+     *
+     * Args:
+     *   无。
+     *
+     * Returns:
+     *   number: 条数上限；未配置时用默认值。
+     *
+     * Callers:
+     *   - `recordOf`。
+     */
+    private forwardExpandCount;
     /** 当前是否处于休眠窗口（每日窗口或高峰时段）。 */
     private sleeping;
     /** 占位说明：为什么现在是睡觉时间。 */

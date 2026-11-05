@@ -18,6 +18,7 @@ import { type MediaLimits } from './shared.js';
  *   bridge (ChatBridge): 会话解析与出站发送的桥接对象。
  *   connection (OneBotConnection): NapCat API 代理与群历史的调用通道。
  *   limits (MediaLimits): 各媒体类型的大小上限。
+ *   mediaDir (string): 插件媒体目录；本地表情库落在其 `stickers` 子目录。
  *
  * Returns:
  *   () => void: 注销全部工具的 disposer。
@@ -25,4 +26,4 @@ import { type MediaLimits } from './shared.js';
  * Callers:
  *   - `bridge/index.ts:installChannelScope`（agent 作用域安装频道能力）。
  */
-export declare function registerTools(ctx: Context, bridge: ChatBridge, connection: OneBotConnection, limits: MediaLimits): () => void;
+export declare function registerTools(ctx: Context, bridge: ChatBridge, connection: OneBotConnection, limits: MediaLimits, mediaDir: string): () => void;

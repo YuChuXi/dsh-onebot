@@ -3,7 +3,7 @@
  * 其余来源（base64 / file / URL）原样交给 NapCat。
  * @module dsh-onebot/segment-types/media
  */
-import type { MediaLimitKey, MediaSegmentType } from '../../media/kinds.js'
+import type { MediaLimitKey } from '../../media/kinds.js'
 import { mediaKindOf, mediaLabel } from '../../media/kinds.js'
 import { encodeLocalFile, isLocalPath } from '../../media/local.js'
 import { isUrl } from '../../media/store.js'
@@ -15,8 +15,11 @@ import { registerSegmentType, type SegmentSendContext } from './registry.js'
 /** 媒体段携带的来源属性。 */
 const SOURCE_FIELDS: readonly string[] = ['file', 'url', 'sub_type', 'summary', 'file_id', 'name']
 
+/** 由本模块归一化的段类型；商城表情有自己的适配器，不在此表内。 */
+type LocalMediaSegment = 'image' | 'record' | 'video' | 'file'
+
 /** 段类型 → 出站大小上限的配置键。 */
-const LIMIT: Record<MediaSegmentType, MediaLimitKey> = {
+const LIMIT: Record<LocalMediaSegment, MediaLimitKey> = {
   image: 'maxImageBytes',
   record: 'maxVoiceBytes',
   video: 'maxFileBytes',
@@ -38,7 +41,7 @@ const LIMIT: Record<MediaSegmentType, MediaLimitKey> = {
  *   - `segment-types/media.ts` 的四个注册项。
  */
 async function normalizeMedia(
-  type: MediaSegmentType,
+  type: LocalMediaSegment,
   data: Record<string, unknown>,
   ctx: SegmentSendContext,
 ): Promise<OutboundSegment | undefined> {
@@ -55,7 +58,7 @@ async function normalizeMedia(
   return { type, data: { ...attrs, file: encoded } }
 }
 
-for (const type of Object.keys(LIMIT) as MediaSegmentType[]) {
+for (const type of Object.keys(LIMIT) as LocalMediaSegment[]) {
   registerSegmentType(type, {
     segment: (): Segment => ({ type, data: {} }) as Segment,
     render: segment => {

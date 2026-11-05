@@ -16,6 +16,7 @@ import type { ChatId } from '../chat/index.js';
  * Args:
  *   chatId (ChatId): 会话 id；决定提示词里的群号 / 对方 QQ。
  *   restrictedMembers (boolean): 是否包含受限成员约束。
+ *   mediaDir (string): 媒体目录；媒体段渲染值省略了该前缀，在此告知模型完整路径的拼法。
  *   extraPrompt (string): 附加提示词（人设、背景、语言风格等）；去除首尾空白后追加在段落末尾，空串不追加。
  *
  * Returns:
@@ -24,4 +25,4 @@ import type { ChatId } from '../chat/index.js';
  * Callers:
  *   - `src/bridge/index.ts:installChannelScope` 为每个 QQ 会话注册系统提示词。
  */
-export declare function buildPlatformPrompt(chatId: ChatId, restrictedMembers: boolean, extraPrompt?: string): string;
+export declare function buildPlatformPrompt(chatId: ChatId, restrictedMembers: boolean, mediaDir: string, extraPrompt?: string): string;

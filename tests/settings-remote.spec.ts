@@ -291,7 +291,7 @@ describe('onebotSettings remote — W6 白名单扩展（观测/调试 5 键）'
   it('5 个新键入快照：默认值正确、落在 diagnostics 组、计入 ALL_KEYS', () => {
     const editor = new FakeConfigEditor()
     const snapshot = getSettings(editor, createRevisionState())
-    expect(ALL_KEYS).toHaveLength(36)
+    expect(ALL_KEYS).toHaveLength(39)
     expect(snapshot.groups.diagnostics).toEqual([...NEW_BOOLEAN_KEYS])
     for (const key of NEW_BOOLEAN_KEYS) {
       expect(snapshot.config[key]).toBe(NEW_DEFAULTS[key])
@@ -384,7 +384,7 @@ describe('onebotSettings remote — W6 失败守卫（configEditor 失败场景�
 describe('onebotSettings remote — W7 workspacePath 白名单（connection 组）', () => {
   it('workspacePath 入快照：默认值 \'\'、connection 组键序追加、计入 ALL_KEYS', () => {
     const snapshot = getSettings(new FakeConfigEditor(), createRevisionState())
-    expect(ALL_KEYS).toHaveLength(36)
+    expect(ALL_KEYS).toHaveLength(39)
     expect(SCHEMA_DEFAULTS.workspacePath).toBe('')
     expect(SETTINGS_GROUPS.connection).toEqual(['mode', 'host', 'port', 'url', 'accessToken', 'botQQ', 'workspacePath'])
     expect(snapshot.groups.connection).toEqual(SETTINGS_GROUPS.connection)
@@ -535,15 +535,22 @@ describe('onebotSettings remote — 模型能力查询与动态档位', () => {
 })
 
 describe('onebotSettings remote — 插话三开关（behavior 组）', () => {
-  it('三开关入快照：默认值正确、behavior 组键序、ALL_KEYS 36', () => {
+  it('三开关入快照：默认值正确、behavior 组键序、ALL_KEYS 39', () => {
     const snapshot = getSettings(new FakeConfigEditor(), createRevisionState())
-    expect(ALL_KEYS).toHaveLength(36)
+    expect(ALL_KEYS).toHaveLength(39)
     expect(SCHEMA_DEFAULTS.steerEnabled).toBe(false)
     expect(SCHEMA_DEFAULTS.steerAllMembers).toBe(false)
     expect(SCHEMA_DEFAULTS.steerAllowRestricted).toBe(true)
     expect(SETTINGS_GROUPS.behavior).toEqual([
-      'sendErrorNotice', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages', 'steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'sleepMode', 'sleepStart', 'sleepEnd',
+      'sendErrorNotice', 'outboundIntervalBaseMs', 'outboundIntervalPerCharMs', 'outboundIntervalJitterPct', 'recentMessages', 'quoteExpandDepth', 'forwardExpandDepth', 'forwardExpandCount', 'steerEnabled', 'steerAllMembers', 'steerAllowRestricted', 'sleepMode', 'sleepStart', 'sleepEnd',
     ])
+    // 引用/转发展开：层级默认 0（只保留 id），转发单次条数默认 20。
+    expect(SCHEMA_DEFAULTS.quoteExpandDepth).toBe(0)
+    expect(SCHEMA_DEFAULTS.forwardExpandDepth).toBe(0)
+    expect(SCHEMA_DEFAULTS.forwardExpandCount).toBe(20)
+    expect(snapshot.config.quoteExpandDepth).toBe(0)
+    expect(snapshot.config.forwardExpandDepth).toBe(0)
+    expect(snapshot.config.forwardExpandCount).toBe(20)
     // 私聊/群聊两大块：模型、思考强度、附加提示词 + 各自的准入（策略/白名单）。
     expect(SETTINGS_GROUPS.private).toEqual(['modelPrivate', 'thinkingPrivate', 'extraPromptPrivate', 'dmPolicy', 'allowFrom'])
     expect(SETTINGS_GROUPS.group).toEqual(['modelGroup', 'thinkingGroup', 'extraPromptGroup', 'requireMention', 'groupPolicy', 'groupAllowFrom'])
@@ -553,7 +560,7 @@ describe('onebotSettings remote — 插话三开关（behavior 组）', () => {
     expect(snapshot.config.steerEnabled).toBe(false)
     expect(snapshot.config.steerAllMembers).toBe(false)
     expect(snapshot.config.steerAllowRestricted).toBe(true)
-    expect(snapshot.effect).toBe('restart') // 与全部 36 键同粒度：热重启生效
+    expect(snapshot.effect).toBe('restart') // 与全部 39 键同粒度：热重启生效
   })
 
   it('三开关写入走布尔通道：合法值进覆盖行并递增 revision；非法值拒写 bad-request 且 edit 零调用', async () => {
@@ -588,9 +595,9 @@ describe('onebotSettings remote — 插话三开关（behavior 组）', () => {
 })
 
 describe('onebotSettings remote — 出站节流三键（behavior 组）', () => {
-  it('三键入快照：默认 300/60/30、behavior 组键序、ALL_KEYS 36', () => {
+  it('三键入快照：默认 300/60/30、behavior 组键序、ALL_KEYS 39', () => {
     const snapshot = getSettings(new FakeConfigEditor(), createRevisionState())
-    expect(ALL_KEYS).toHaveLength(36)
+    expect(ALL_KEYS).toHaveLength(39)
     expect(SCHEMA_DEFAULTS.outboundIntervalBaseMs).toBe(300)
     expect(SCHEMA_DEFAULTS.outboundIntervalPerCharMs).toBe(60)
     expect(SCHEMA_DEFAULTS.outboundIntervalJitterPct).toBe(30)

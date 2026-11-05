@@ -133,7 +133,7 @@ describe('reply-only group mention verification', () => {
   })
 
   it('trusts an explicit @ and reuses the single quote lookup for expansion', async () => {
-    const h = makeHarness({ author: OTHER })
+    const h = makeHarness({ author: OTHER, config: { quoteExpandDepth: 1 } })
     await runWithTrace(h.trace, () => h.pipeline.processInbound(inbound([atBot, reply('123'), body])))
     expect(h.getMsgCalls()).toHaveLength(1)
     expect(h.dispatchFollowup).toHaveBeenCalledTimes(1)
@@ -177,7 +177,7 @@ describe('reply-only group mention verification', () => {
   })
 
   it('keeps private chats free of quote-author verification', async () => {
-    const h = makeHarness()
+    const h = makeHarness({ config: { quoteExpandDepth: 1 } })
     await runWithTrace(h.trace, () => h.pipeline.processInbound(inbound([reply('123'), body], {
       message_type: 'private', group_id: undefined,
     })))
@@ -187,7 +187,7 @@ describe('reply-only group mention verification', () => {
   })
 
   it('keeps groups without requireMention free of quote-author verification', async () => {
-    const h = makeHarness({ config: { requireMention: false } })
+    const h = makeHarness({ config: { requireMention: false, quoteExpandDepth: 1 } })
     await runWithTrace(h.trace, () => h.pipeline.processInbound(inbound([reply('123'), body])))
     expect(h.getMsgCalls()).toHaveLength(1)
     expect(h.dispatchFollowup).toHaveBeenCalledTimes(1)

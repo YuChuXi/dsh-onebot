@@ -16,9 +16,10 @@ import type { ChatBridge } from '../bridge/index.js'
 import type { OneBotConnection } from '../onebot/connection.js'
 import { splitChatId } from '../chat/index.js'
 import { encodeLocalFile, isLocalPath } from '../media/local.js'
+import { StickerLibrary } from '../media/stickers.js'
 import { incomingSegments, parseMessage } from '../onebot/segments.js'
 import { registerSendTools } from './send.js'
-import { registerStickerTools } from './stickers.js'
+import { registerStickerTools, type StickerImageStore } from './stickers.js'
 import { registerScheduleTools } from './schedule.js'
 import { CHAT_ID_PARAM, END_PARAM, mediaRoots, resolveChat, type MediaLimits, type RegisterTool } from './shared.js'
 
@@ -27,8 +28,6 @@ const NAPCAT_API_WHITELIST = [
   'get_group_member_list',
   'get_group_member_info',
   'get_stranger_info',
-  'fetch_custom_face',
-  'add_custom_face',
   'group_poke',
   'friend_poke',
   'get_forward_msg',
@@ -128,6 +127,7 @@ function selectionWithLevel(base: ModelSelection, level: string | undefined): Mo
  *   bridge (ChatBridge): 会话解析与出站发送的桥接对象。
  *   connection (OneBotConnection): NapCat API 代理与群历史的调用通道。
  *   limits (MediaLimits): 各媒体类型的大小上限。
+ *   mediaDir (string): 插件媒体目录；本地表情库落在其 `stickers` 子目录。
  *
  * Returns:
  *   () => void: 注销全部工具的 disposer。
@@ -140,6 +140,7 @@ export function registerTools(
   bridge: ChatBridge,
   connection: OneBotConnection,
   limits: MediaLimits,
+  mediaDir: string,
 ): () => void {
   const disposers: Array<() => void> = []
   const register: RegisterTool = tool => {
@@ -147,7 +148,9 @@ export function registerTools(
   }
 
   registerSendTools(register, bridge, limits)
-  registerStickerTools(register, bridge, connection, limits)
+  registerStickerTools(register, bridge, new StickerLibrary(mediaDir), limits, () => (
+    ctx.get('attachments' as never) as unknown as StickerImageStore | undefined
+  ))
   registerScheduleTools(register, bridge)
 
   register(defineTool({

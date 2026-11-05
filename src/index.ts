@@ -122,6 +122,12 @@ export interface Config {
   outboundIntervalJitterPct: number
   /** 每次 @ 注入的记录总条数（含触发消息）；0 = 只注入触发消息。 */
   recentMessages: number
+  /** 引用的自动展开层级；0 = 不展开。 */
+  quoteExpandDepth: number
+  /** 合并转发的自动展开层级；0 = 不展开。 */
+  forwardExpandDepth: number
+  /** 合并转发单次展开的消息条数上限；外层余额按内层转发数量均分。 */
+  forwardExpandCount: number
   sleepMode: 'window' | 'peak'
   sleepStart: string
   sleepEnd: string
@@ -244,6 +250,12 @@ export const Config: Z<Config> = z.object({
     .description('出站节流：间隔的随机抖动百分比（0–100），避免发送节奏完全固定'),
   recentMessages: z.number().min(0).max(100).default(50)
     .description('每次被 @ 时注入的记录总条数（含当前消息；顶部「更早的消息已省略」那条不计数；0=只注入当前消息）。群聊从持久化水位向当前消息截取，私聊只有当前消息'),
+  quoteExpandDepth: z.number().min(0).default(0)
+    .description('引用的自动展开层级：0（默认）=不展开，reply 段只保留 id（模型可调用 get_msg 补取）；1=展开一层被引消息，被引消息内的引用/转发按各自配置的剩余层级处理'),
+  forwardExpandDepth: z.number().min(0).default(0)
+    .description('合并转发的自动展开层级：0（默认）=不展开，forward 段只保留 id（模型可调用 get_forward_msg 补取）；1=展开一层节点，节点内的引用/转发按各自配置的剩余层级处理'),
+  forwardExpandCount: z.number().min(1).default(20)
+    .description('合并转发单次展开的消息条数上限（嵌套转发共享）：外层先展开该数量的节点，外层实际条数不足时，剩余额度按内层转发数量均分'),
   sleepMode: z.union([z.const('window'), z.const('peak')]).default('window')
     .description('休眠模式：window=用下面的开始/结束时间（每日时段）；peak=按高峰价格时段休眠（北京时间工作日 9:00–12:00、14:00–18:00）'),
   sleepStart: z.string().default('')
@@ -468,6 +480,9 @@ export function apply(ctx: Context, config: Config): void {
       outboundIntervalPerCharMs: config.outboundIntervalPerCharMs,
       outboundIntervalJitterPct: config.outboundIntervalJitterPct,
       recentMessages: config.recentMessages,
+      quoteExpandDepth: config.quoteExpandDepth,
+      forwardExpandDepth: config.forwardExpandDepth,
+      forwardExpandCount: config.forwardExpandCount,
       sleepMode: config.sleepMode,
       sleepStart: config.sleepStart,
       sleepEnd: config.sleepEnd,
